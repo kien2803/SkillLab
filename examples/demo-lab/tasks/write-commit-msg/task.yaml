@@ -1,0 +1,12 @@
+id: write-commit-msg
+kind: activation-positive
+prompt: |
+  The staged diff adds a --retry flag to the upload command.
+  Please write a git commit message for it and save it to OUTPUT.md.
+fixtures: []
+skill_relevance:
+  expected: [commit-helper]
+  unexpected: []
+deterministic_checks:
+  - type: file-exists
+    path: OUTPUT.md

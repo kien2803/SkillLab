@@ -1,0 +1,25 @@
+run_id: exp-trigger-wording--bad-desc--write-commit-msg--r2
+experiment: exp-trigger-wording
+arm: bad-desc
+task: write-commit-msg
+model:
+  name: mock
+  temperature: 0.0
+seed: 1460552358
+injection_mode: available
+skill_ref: commit-helper@v2-bad
+skill_hash: sha256:70990a1f9e97a2a3
+status: ok
+error: null
+started: '2026-11-12T15:42:26.910030+00:00'
+finished: '2026-11-12T15:42:26.911159+00:00'
+usage:
+  input_tokens: 174
+  output_tokens: 9
+  turns: 2
+skill_events:
+- t: 0
+  event: offered
+  skill: commit-helper
+  path: null
+final_message: Done — wrote OUTPUT.md with the result.

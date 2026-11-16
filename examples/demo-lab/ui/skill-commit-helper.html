@@ -1,0 +1,40 @@
+<!doctype html><meta charset=utf-8><title>skill: commit-helper</title><style>
+body{font-family:ui-monospace,Menlo,monospace;max-width:1100px;margin:2rem auto;
+padding:0 1rem;color:#222;background:#fafafa}
+h1{border-bottom:2px solid #333;padding-bottom:.3rem}
+h2{margin-top:2rem}
+table{border-collapse:collapse;width:100%;margin:1rem 0}
+th,td{border:1px solid #ccc;padding:.4rem .6rem;text-align:left;font-size:.9rem}
+th{background:#eee}
+a{color:#06c}
+nav{margin:1rem 0;font-size:.9rem}
+pre{background:#f0f0f0;padding:1rem;overflow-x:auto;font-size:.85rem}
+.sev-error{color:#b00}.sev-warn{color:#a60}.sev-info{color:#668}
+.msg{border:1px solid #ddd;margin:.5rem 0;padding:.5rem .8rem;border-radius:4px}
+.role-system{background:#eef}.role-user{background:#efe}
+.role-assistant{background:#fff}.role-tool{background:#f6f6f6;color:#555}
+.tag{display:inline-block;background:#ddd;border-radius:3px;padding:.1rem .4rem;
+font-size:.8rem;margin-right:.3rem}
+</style><h1>skill: commit-helper</h1><nav><a href="index.html">index</a> · <a href="experiments.html">experiments</a> · <a href="insights.html">insights</a></nav><p><span class=tag>skill-md</span><span class=tag>draft</span></p><h2>Findings</h2><table><tr><th>variant</th><th>severity</th><th>check</th><th>message</th></tr><tr><td>v1</td><td><span class="sev-info">info</span></td><td>anti-patterns</td><td>no code block / concrete example in entry file — examples anchor agent behavior better than prose</td></tr><tr><td>v2-bad</td><td><span class="sev-warn">warn</span></td><td>description-quality</td><td>description too short (19 chars &lt; 40) — agents can&#x27;t tell when to trigger</td></tr><tr><td>v2-bad</td><td><span class="sev-info">info</span></td><td>description-quality</td><td>no explicit trigger condition detected — consider naming concrete situations (&#x27;use when …&#x27;)</td></tr><tr><td>v2-bad</td><td><span class="sev-error">error</span></td><td>dead-links</td><td>reference to missing file &#x27;resources/missing.md&#x27;</td></tr><tr><td>v2-bad</td><td><span class="sev-info">info</span></td><td>anti-patterns</td><td>3 absolute directives (ALWAYS/NEVER) — over-prescriptive skills can crowd out model judgment</td></tr><tr><td>v2-bad</td><td><span class="sev-info">info</span></td><td>anti-patterns</td><td>restates default model knowledge (&#x27;write clean code&#x27; etc.) — tokens spent teaching what the model already does</td></tr><tr><td>v2-bad</td><td><span class="sev-info">info</span></td><td>anti-patterns</td><td>no code block / concrete example in entry file — examples anchor agent behavior better than prose</td></tr><tr><td>v2-bad</td><td><span class="sev-warn">warn</span></td><td>principle-conformance</td><td>description lacks a concrete trigger condition (principle: specific-trigger-descriptions)</td></tr></table><h2>v1</h2><pre>---
+name: commit-helper
+description: &gt;-
+  Use when the user asks to write or improve a git commit message, draft a
+  changelog entry, or summarize staged changes for a commit.
+---
+
+# Commit Helper
+
+Write commit messages in conventional-commit style: `type(scope): summary`.
+
+Types: feat, fix, refactor, docs, test, chore. Keep the summary under 72
+chars, imperative mood. Details in `resources/style.md`.
+</pre><h2>v2-bad</h2><pre>---
+name: commit-helper
+description: Helps with commits.
+---
+
+# Commit Helper
+
+ALWAYS write clean code. NEVER skip best practices. ALWAYS be helpful.
+See `resources/missing.md` for details.
+</pre>

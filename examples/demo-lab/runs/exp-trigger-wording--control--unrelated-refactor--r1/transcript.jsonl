@@ -1,0 +1,5 @@
+{"role": "system", "content": "You are an autonomous agent completing a task inside a workspace directory.\nUse the provided tools to inspect and modify files. Paths are relative to the\nworkspace root.\n\n## Available skills\nIf a skill below is relevant, load it with `read_skill` before relying on it.\n\n(none)\n\nWhen the task is complete, reply with a short summary of what you did."}
+{"role": "user", "content": "Refactor the Python code in src/ for readability and write the result\nsummary to OUTPUT.md.\n"}
+{"role": "assistant", "content": "", "tool_calls": [{"id": "mock-0-1", "type": "function", "function": {"name": "write_file", "arguments": "{\"path\": \"OUTPUT.md\", \"content\": \"# Mock agent output\\n\\nTask: Refactor the Python code in src/ for readability and write the result summary to OUTPUT.md.\\n\\nResult: completed (simulated).\\n\"}"}}]}
+{"role": "tool", "tool_call_id": "mock-0-1", "name": "write_file", "content": "wrote OUTPUT.md (151 bytes)"}
+{"role": "assistant", "content": "Done — wrote OUTPUT.md with the result."}

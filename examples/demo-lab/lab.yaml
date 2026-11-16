@@ -1,0 +1,7 @@
+# Skill Lab config
+model: mock            # rollout model ('mock' = offline simulation)
+judge_model: mock      # model used for llm-judge criteria
+temperature: 0.0
+rollouts_per_arm: 5
+max_turns: 15
+sandbox: bwrap

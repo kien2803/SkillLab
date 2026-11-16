@@ -1,0 +1,25 @@
+run_id: exp-content-quality--good-desc--unrelated-refactor--r0
+experiment: exp-content-quality
+arm: good-desc
+task: unrelated-refactor
+model:
+  name: mock
+  temperature: 0.0
+seed: 1519908110
+injection_mode: injected
+skill_ref: commit-helper@v1
+skill_hash: sha256:971c5f8dc58349e9
+status: ok
+error: null
+started: '2026-11-12T15:42:37.094175+00:00'
+finished: '2026-11-12T15:42:37.095019+00:00'
+usage:
+  input_tokens: 241
+  output_tokens: 9
+  turns: 2
+skill_events:
+- t: 0
+  event: offered
+  skill: commit-helper
+  path: null
+final_message: Done — wrote OUTPUT.md with the result.

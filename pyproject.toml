@@ -1,0 +1,23 @@
+[project]
+name = "skilllab"
+version = "0.1.0"
+description = "Skill Lab — an experiment-first environment for researching and crafting AI agent skills"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+llm = ["litellm>=1.40.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+lab = "skilllab.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["skilllab*"]

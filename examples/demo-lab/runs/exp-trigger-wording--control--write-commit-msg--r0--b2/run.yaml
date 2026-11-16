@@ -1,0 +1,21 @@
+run_id: exp-trigger-wording--control--write-commit-msg--r0--b2
+experiment: exp-trigger-wording
+arm: control
+task: write-commit-msg
+model:
+  name: mock
+  temperature: 0.0
+seed: 457761955
+injection_mode: available
+skill_ref: null
+skill_hash: null
+status: ok
+error: null
+started: '2026-11-13T03:13:09.151680+00:00'
+finished: '2026-11-13T03:13:09.152001+00:00'
+usage:
+  input_tokens: 166
+  output_tokens: 9
+  turns: 2
+skill_events: []
+final_message: Done — wrote OUTPUT.md with the result.

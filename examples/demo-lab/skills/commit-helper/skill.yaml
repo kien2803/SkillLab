@@ -1,0 +1,11 @@
+id: commit-helper
+kind: skill-md
+status: draft
+tags: []
+variants:
+- id: v1
+  path: variants/v1
+  note: imported
+- id: v2-bad
+  path: variants/v2-bad
+  note: imported

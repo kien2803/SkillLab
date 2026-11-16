@@ -1,0 +1,12 @@
+id: unrelated-refactor
+kind: activation-negative
+prompt: |
+  Refactor the Python code in src/ for readability and write the result
+  summary to OUTPUT.md.
+fixtures: [src]
+skill_relevance:
+  expected: []
+  unexpected: [commit-helper]
+deterministic_checks:
+  - type: file-exists
+    path: OUTPUT.md

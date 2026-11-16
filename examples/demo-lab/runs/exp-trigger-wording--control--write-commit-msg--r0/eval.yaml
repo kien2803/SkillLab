@@ -1,0 +1,8 @@
+checks:
+- id: OUTPUT.md
+  method: deterministic
+  passed: true
+  score: 1.0
+  detail: OUTPUT.md exists
+rubric_score: null
+success: true

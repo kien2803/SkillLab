@@ -1,0 +1,25 @@
+run_id: exp-trigger-wording--good-desc--unrelated-refactor--r2
+experiment: exp-trigger-wording
+arm: good-desc
+task: unrelated-refactor
+model:
+  name: mock
+  temperature: 0.0
+seed: 217547540
+injection_mode: available
+skill_ref: commit-helper@v1
+skill_hash: sha256:971c5f8dc58349e9
+status: ok
+error: null
+started: '2026-11-12T15:42:26.893487+00:00'
+finished: '2026-11-12T15:42:26.894727+00:00'
+usage:
+  input_tokens: 193
+  output_tokens: 9
+  turns: 2
+skill_events:
+- t: 0
+  event: offered
+  skill: commit-helper
+  path: null
+final_message: Done — wrote OUTPUT.md with the result.
