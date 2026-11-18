@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -33,25 +35,84 @@ class LLMReply:
 
 class LLMClient:
     def __init__(self, model: str, temperature: float = 0.0,
-                 seed: Optional[int] = None):
+                 seed: Optional[int] = None, timeout: float = 120,
+                 max_retries: int = 3, cwd: Optional[str] = None):
         self.model = model
         self.temperature = temperature
         self.seed = seed
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.cwd = cwd
         self.is_mock = model == "mock" or model.startswith("mock:")
+        self.is_cmd = model.startswith("cmd:")
 
     def complete(self, messages: list[dict],
                  tools: Optional[list[dict]] = None) -> LLMReply:
         if self.is_mock:
             return _mock_complete(messages, tools or [])
+        if self.is_cmd:
+            return _cmd_complete(self.model[4:], messages, tools or [],
+                                 self.timeout, self.cwd)
         return _litellm_complete(self.model, self.temperature, self.seed,
-                                 messages, tools)
+                                 messages, tools, self.timeout,
+                                 self.max_retries)
+
+
+# ------------------------------------------------------- cmd: driver backend --
+#
+# `model: cmd:<shell command>` runs an external agent/driver once per turn.
+# stdin gets one JSON object: {"messages": [...], "tools": [...]}; stdout must
+# be a single JSON object:
+#   {"content": "...", "tool_calls": [{"name": ..., "arguments": {...}}],
+#    "input_tokens": 0, "output_tokens": 0}
+# The driver runs with cwd = run workspace, so it can read/write task files
+# directly. Anything on stderr is surfaced when the driver fails. This is the
+# integration point for external agent frameworks — wrap any agent CLI in a
+# small adapter and point `model:` at it.
+
+def _cmd_complete(cmd: str, messages: list[dict], tools: list[dict],
+                  timeout: float, cwd: Optional[str]) -> LLMReply:
+    payload = json.dumps({"messages": messages, "tools": tools})
+    try:
+        r = subprocess.run(cmd, shell=True, input=payload, cwd=cwd,
+                           capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"driver timed out after {timeout}s") from e
+    if r.returncode != 0:
+        raise RuntimeError(f"driver exited {r.returncode}: "
+                           f"{r.stderr.strip()[:400]}")
+    try:
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+    except (json.JSONDecodeError, IndexError) as e:
+        raise RuntimeError(f"driver returned non-JSON output: "
+                           f"{r.stdout.strip()[:200]}") from e
+    calls = [
+        ToolCall(
+            id=str(tc.get("id") or f"cmd-{i}"),
+            name=tc["name"],
+            arguments=tc.get("arguments") or {},
+        )
+        for i, tc in enumerate(out.get("tool_calls") or [])
+    ]
+    return LLMReply(
+        content=out.get("content") or "",
+        tool_calls=calls,
+        input_tokens=int(out.get("input_tokens") or 0),
+        output_tokens=int(out.get("output_tokens") or 0),
+    )
 
 
 # ---------------------------------------------------------------- litellm --
 
+# Errors worth retrying — rate limits, connection drops, 5xx. Auth errors,
+# bad requests and content-policy refusals fail immediately.
+_TRANSIENT = ("RateLimitError", "APIConnectionError", "Timeout",
+              "InternalServerError", "ServiceUnavailableError")
+
+
 def _litellm_complete(model: str, temperature: float, seed: Optional[int],
-                      messages: list[dict],
-                      tools: Optional[list[dict]]) -> LLMReply:
+                      messages: list[dict], tools: Optional[list[dict]],
+                      timeout: float, max_retries: int) -> LLMReply:
     try:
         import litellm  # type: ignore
     except ImportError as e:
@@ -59,13 +120,23 @@ def _litellm_complete(model: str, temperature: float, seed: Optional[int],
             "litellm not installed — run `pip install 'skilllab[llm]'` "
             "or set model: mock for offline runs") from e
     kwargs: dict[str, Any] = dict(
-        model=model, messages=messages, temperature=temperature)
+        model=model, messages=messages, temperature=temperature,
+        timeout=timeout)
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
     if seed is not None:
         kwargs["seed"] = seed
-    resp = litellm.completion(**kwargs)
+    transient = tuple(cls for n in _TRANSIENT
+                      if isinstance((cls := getattr(litellm, n, None)), type))
+    for attempt in range(max_retries + 1):
+        try:
+            resp = litellm.completion(**kwargs)
+            break
+        except transient:
+            if attempt >= max_retries:
+                raise
+            time.sleep(min(2 ** attempt * 2, 30))
     msg = resp.choices[0].message
     calls = [
         ToolCall(

@@ -40,9 +40,17 @@ def new_insight(lab: Lab, title: str, evidence: str = "") -> Path:
     p = lab.insights_dir / f"{iid}.md"
     if p.exists():
         raise LabError(f"Insight '{iid}' already exists.")
+    if evidence and not _evidence_exists(lab, evidence):
+        raise LabError(f"evidence '{evidence}' is not an experiment or run "
+                       "in this lab — insights must link real evidence")
     ev = f'"{evidence}"' if evidence else ""
     p.write_text(TEMPLATE.format(iid=iid, evidence=ev))
     return p
+
+
+def _evidence_exists(lab: Lab, ref: str) -> bool:
+    return ((lab.experiments_dir / ref / "experiment.yaml").is_file()
+            or (lab.runs_dir / ref / "run.yaml").is_file())
 
 
 def list_insights(lab: Lab) -> list[dict]:
@@ -59,6 +67,23 @@ def list_insights(lab: Lab) -> list[dict]:
                 "kind": "principle" if d == lab.principles_dir else "insight",
             })
     return out
+
+
+def _set_status(lab: Lab, insight_id: str, status: str) -> Path:
+    for d in (lab.insights_dir, lab.principles_dir):
+        p = d / f"{insight_id}.md"
+        if p.is_file():
+            fm, body = parse_frontmatter(p.read_text())
+            fm["status"] = status
+            p.write_text("---\n" + yaml.safe_dump(
+                fm, sort_keys=False, allow_unicode=True) + "---\n" + body)
+            return p
+    raise LabError(f"Insight '{insight_id}' not found.")
+
+
+def refute(lab: Lab, insight_id: str) -> Path:
+    """Mark an insight refuted — refuted insights are kept, not deleted."""
+    return _set_status(lab, insight_id, "refuted")
 
 
 def promote(lab: Lab, insight_id: str) -> Path:

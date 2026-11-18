@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 from .lab import Lab, LabError
@@ -76,27 +78,80 @@ def new_skill(lab: Lab, skill_id: str, kind: str = "skill-md") -> Path:
     return skill_dir
 
 
-def add_skill(lab: Lab, src: Path, variant_id: str | None = None,
+GIT_URL_RE = re.compile(r"^(https?://|ssh://|git@)")
+
+# Well-known locations other agents/tools install skills into.
+SCAN_DIRS = ("~/.agents/skills", "~/.claude/skills",
+             "~/.config/devin/skills", ".agents/skills", ".claude/skills",
+             ".config/devin/skills")
+
+
+def scan_skill_dirs() -> list[Path]:
+    """Discover dirs containing a skill entry file in known locations."""
+    found = []
+    for pat in SCAN_DIRS:
+        base = Path(pat).expanduser()
+        if not base.is_dir():
+            continue
+        for d in sorted(base.iterdir()):
+            if d.is_dir() and skill_entry_file(d):
+                found.append(d)
+    return found
+
+
+def _fetch_git(url_ref: str) -> tuple[Path, Path]:
+    """Shallow-clone `url[#subdir]` into a tempdir. Returns (root, subdir)."""
+    url, _, frag = url_ref.partition("#")
+    tmp = Path(tempfile.mkdtemp(prefix="skilllab-git-"))
+    try:
+        r = subprocess.run(["git", "clone", "--depth", "1", url, str(tmp)],
+                           capture_output=True, text=True, timeout=180)
+    except FileNotFoundError as e:
+        raise LabError("git is not on PATH — needed for URL imports") from e
+    except subprocess.TimeoutExpired as e:
+        raise LabError(f"git clone timed out for {url}") from e
+    if r.returncode != 0:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise LabError(f"git clone failed: {r.stderr.strip()[:300]}")
+    return tmp, (tmp / frag if frag else tmp)
+
+
+def add_skill(lab: Lab, src: str | Path, variant_id: str | None = None,
               skill_id: str | None = None) -> Path:
-    """Import an existing skill dir (containing SKILL.md) as a new variant."""
-    src = src.resolve()
-    entry = skill_entry_file(src)
-    if not entry:
-        raise LabError(f"No SKILL.md found in {src}")
-    fm, _ = parse_frontmatter(entry.read_text())
-    sid = _slugify(skill_id or str(fm.get("name") or src.name))
-    skill_dir = lab.skills_dir / sid
+    """Import a skill dir (containing SKILL.md) as a new variant.
 
-    if skill_dir.exists():
-        meta = SkillMeta.load(skill_dir)
-    else:
-        meta = SkillMeta(id=sid)
+    `src` may be a local path or a git URL, optionally with `#subdir` to
+    import a skill nested inside a repo.
+    """
+    tmpdir: Path | None = None
+    try:
+        s = str(src)
+        if GIT_URL_RE.match(s):
+            tmpdir, src = _fetch_git(s)
+        else:
+            src = Path(s)
+        src = src.resolve()
+        entry = skill_entry_file(src)
+        if not entry:
+            raise LabError(f"No SKILL.md found in {src}")
+        fm, _ = parse_frontmatter(entry.read_text())
+        sid = _slugify(skill_id or str(fm.get("name") or src.name))
+        skill_dir = lab.skills_dir / sid
 
-    vid = variant_id or f"v{len(meta.variants) + 1}"
-    if any(v.id == vid for v in meta.variants):
-        raise LabError(f"Variant '{vid}' already exists on skill '{sid}'.")
-    dest = skill_dir / "variants" / vid
-    shutil.copytree(src, dest)
-    meta.variants.append(Variant(id=vid, path=f"variants/{vid}", note="imported"))
-    meta.save(skill_dir)
-    return skill_dir
+        if skill_dir.exists():
+            meta = SkillMeta.load(skill_dir)
+        else:
+            meta = SkillMeta(id=sid)
+
+        vid = variant_id or f"v{len(meta.variants) + 1}"
+        if any(v.id == vid for v in meta.variants):
+            raise LabError(f"Variant '{vid}' already exists on skill '{sid}'.")
+        dest = skill_dir / "variants" / vid
+        shutil.copytree(src, dest)
+        meta.variants.append(Variant(id=vid, path=f"variants/{vid}",
+                                     note="imported"))
+        meta.save(skill_dir)
+        return skill_dir
+    finally:
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir, ignore_errors=True)

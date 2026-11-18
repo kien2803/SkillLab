@@ -11,7 +11,8 @@ from pathlib import Path
 
 from .analyzer import analyze_skill
 from .lab import Lab
-from .models import RunRecord, load_yaml, parse_frontmatter
+from .models import (EvalResult, RunRecord, load_yaml, parse_frontmatter,
+                     parse_skill_ref)
 from .registry import skill_description
 from .report import load_runs
 
@@ -170,6 +171,20 @@ def generate(lab: Lab) -> Path:
         (out / f"run-{rec.run_id}.html").write_text(
             _page(lab, rec.run_id, body))
 
+    # runs grouped by skill for the per-variant comparison table
+    skill_runs: dict[str, list[tuple[RunRecord, EvalResult | None]]] = {}
+    for d in lab.runs_dir.iterdir() if lab.runs_dir.is_dir() else []:
+        ry = d / "run.yaml"
+        if not ry.is_file():
+            continue
+        rec = RunRecord(**load_yaml(ry))
+        if not rec.skill_ref:
+            continue
+        ey = d / "eval.yaml"
+        ev = EvalResult(**load_yaml(ey)) if ey.is_file() else None
+        sid, _ = parse_skill_ref(rec.skill_ref)
+        skill_runs.setdefault(sid, []).append((rec, ev))
+
     # skill pages
     for m in lab.skills():
         findings = analyze_skill(lab, m.id)
@@ -183,6 +198,16 @@ def generate(lab: Lab) -> Path:
                 f"<span class=tag>{_esc(m.status)}</span></p><h2>Findings</h2>"
                 + (_table(["variant", "severity", "check", "message"], rows)
                    if rows else "<p>no findings</p>"))
+        srows = [[f'<a href="run-{_esc(r.run_id)}.html">{_esc(r.run_id)}</a>',
+                  _esc(r.skill_ref or ""), _esc(r.experiment), _esc(r.task),
+                  _esc(r.status),
+                  f"{ev.rubric_score:.2f}" if ev
+                  and ev.rubric_score is not None else "—"]
+                 for r, ev in skill_runs.get(m.id, [])]
+        if srows:
+            body += ("<h2>Runs by variant</h2>" + _table(
+                ["run", "variant", "experiment", "task", "status", "score"],
+                srows))
         for v in m.variants:
             vdir = lab.skills_dir / m.id / v.path
             entry = vdir / "SKILL.md"

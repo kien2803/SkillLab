@@ -299,3 +299,150 @@ def test_graduation_report(lab):
     assert rep.n_runs == 2  # 1 rollout x 2 tasks, treatment arm only
     assert rep.activation_rate == 1.0
     assert rep.false_activation_rate == 0.0
+
+
+def test_workspace_path_traversal_blocked(lab):
+    from skilllab.engine import _ToolEnv
+    ws = lab.runs_dir / "ws"
+    ws.mkdir()
+    sib = lab.runs_dir / "ws2"          # shares the "ws" name prefix
+    sib.mkdir()
+    (sib / "secret.txt").write_text("nope")
+    env = _ToolEnv(lab, ws, {})
+    assert "error" in env.dispatch("read_file",
+                                   {"path": "../ws2/secret.txt"})
+    assert "error" in env.dispatch("read_file", {"path": "/etc/hostname"})
+    assert "error" in env.dispatch("write_file",
+                                   {"path": "../ws2/x", "content": "y"})
+
+
+def test_run_refuses_to_overwrite(lab):
+    assert main(["run", "exp-test-trigger", "--limit", "1"]) == 0
+    assert main(["run", "exp-test-trigger", "--limit", "1"]) == 1
+    assert main(["run", "exp-test-trigger", "--limit", "1",
+                 "--force"]) == 0
+
+
+def test_concluded_experiment_immutable(lab):
+    main(["run", "exp-test-trigger", "--limit", "1"])
+    main(["experiment", "conclude", "exp-test-trigger",
+          "--conclusion", "done"])
+    assert main(["run", "exp-test-trigger", "--limit", "1"]) == 1
+    assert main(["rerun", "exp-test-trigger", "--limit", "1",
+                 "--batch", "b2"]) == 1
+
+
+def test_run_validates_experiment(lab):
+    bad = lab.experiments_dir / "exp-bad-task"
+    bad.mkdir()
+    (bad / "experiment.yaml").write_text(EXP_YAML.replace(
+        "exp-test-trigger", "exp-bad-task").replace(
+        "tasks: [write-commit-msg, unrelated-refactor]",
+        "tasks: [missing-task]"))
+    assert main(["run", "exp-bad-task"]) == 1
+    bad2 = lab.experiments_dir / "exp-bad-skill"
+    bad2.mkdir()
+    (bad2 / "experiment.yaml").write_text(EXP_YAML.replace(
+        "exp-test-trigger", "exp-bad-skill").replace(
+        "commit-helper@v1", "ghost-skill@v9"))
+    assert main(["run", "exp-bad-skill"]) == 1
+
+
+def test_run_validates_single_variable(lab):
+    bad = lab.experiments_dir / "exp-two-vars"
+    bad.mkdir()
+    (bad / "experiment.yaml").write_text(EXP_YAML.replace(
+        "exp-test-trigger", "exp-two-vars").replace(
+        "    skill: commit-helper@v1",
+        "    skill: commit-helper@v1\n    model: gpt-4o"))
+    # treatment differs in skill AND model — two variables at once
+    assert main(["run", "exp-two-vars"]) == 1
+
+
+def test_report_time_to_activation(lab):
+    records = run_experiment(lab, "exp-test-trigger", limit=1)
+    for rec in records:
+        evaluate_run(lab, rec, lab.task(rec.task),
+                     lab.runs_dir / rec.run_id)
+    text = build_report(lab, lab.experiment("exp-test-trigger"))
+    assert "act@turn" in text and "load-cost" in text
+
+
+def test_cmd_driver_backend(tmp_path):
+    import sys
+    drv = tmp_path / "drv.py"
+    drv.write_text(
+        "import sys, json\n"
+        "payload = json.loads(sys.stdin.read())\n"
+        "assert payload['messages'] and 'tools' in payload\n"
+        "print(json.dumps({'content': 'done', 'tool_calls': [],"
+        " 'input_tokens': 3, 'output_tokens': 2}))\n")
+    from skilllab.llm import LLMClient
+    c = LLMClient(f"cmd:{sys.executable} {drv}")
+    r = c.complete([{"role": "user", "content": "x"}],
+                   [{"type": "function", "function": {"name": "t"}}])
+    assert r.content == "done" and r.input_tokens == 3
+    import pytest as _pt
+    with _pt.raises(RuntimeError):
+        LLMClient("cmd:false").complete([{"role": "user", "content": "x"}])
+
+
+def test_human_eval_scoring(lab, capsys):
+    (lab.rubrics_dir / "with-human.yaml").write_text("""\
+id: with-human
+criteria:
+  - id: det
+    weight: 0.5
+    method: deterministic
+    check: OUTPUT.md
+  - id: quality
+    weight: 0.5
+    method: human
+    scale: 1-5
+""")
+    td = lab.tasks_dir / "write-commit-msg" / "task.yaml"
+    td.write_text(td.read_text() + "rubric: with-human\n")
+    assert main(["run", "exp-test-trigger", "--limit", "1"]) == 0
+    rid = "exp-test-trigger--treatment--write-commit-msg--r0"
+    assert main(["eval", rid, "--score", "quality=4"]) == 0
+    out = capsys.readouterr().out
+    assert "rubric_score=0.9" in out
+    # scoring a deterministic criterion is rejected
+    assert main(["eval", rid, "--score", "det=1"]) == 1
+
+
+def test_experiment_list_and_compare(lab, capsys):
+    assert main(["experiment", "list"]) == 0
+    assert "exp-test-trigger" in capsys.readouterr().out
+    main(["run", "exp-test-trigger", "--limit", "2"])
+    assert main(["compare", "exp-test-trigger"]) == 0
+    out = capsys.readouterr().out
+    assert "write-commit-msg" in out and "control" in out
+
+
+def test_insight_refute_and_search(lab, capsys):
+    assert main(["insight", "new", "Ghost evidence",
+                 "--evidence", "no-such-exp"]) == 1
+    assert main(["insight", "new", "Wording wins",
+                 "--evidence", "exp-test-trigger"]) == 0
+    assert main(["insight", "refute", "wording-wins"]) == 0
+    assert main(["insight", "list"]) == 0
+    assert "refuted" in capsys.readouterr().out
+    assert main(["insight", "list", "--search", "wording"]) == 0
+    assert "wording-wins" in capsys.readouterr().out
+    assert main(["insight", "list", "--search", "nomatchzz"]) == 0
+    assert "wording-wins" not in capsys.readouterr().out
+
+
+def test_skill_scan(lab, capsys, monkeypatch):
+    import skilllab.registry as reg
+    ext = lab.root / "ext" / "scan-skill"
+    ext.mkdir(parents=True)
+    (ext / "SKILL.md").write_text(
+        "---\nname: scan-skill\ndescription: Use when scanning for skills "
+        "in known locations.\n---\n\nbody\n")
+    monkeypatch.setattr(reg, "SCAN_DIRS", [str(lab.root / "ext")])
+    assert main(["skill", "scan"]) == 0
+    assert "scan-skill" in capsys.readouterr().out
+    assert main(["skill", "scan", "--import"]) == 0
+    assert (lab.skills_dir / "scan-skill" / "skill.yaml").is_file()

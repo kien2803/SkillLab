@@ -100,13 +100,14 @@ class _ToolEnv:
                  offered: dict[str, Path]):
         self.lab = lab
         self.ws = workspace
+        self._ws_root = workspace.resolve()
         self.offered = offered            # skill name -> variant dir
         self.events: list[SkillEvent] = []
         self.turn = 0
 
     def _resolve(self, rel: str) -> Path:
         p = (self.ws / rel).resolve()
-        if not str(p).startswith(str(self.ws.resolve())):
+        if not p.is_relative_to(self._ws_root):
             raise LabError(f"path escapes workspace: {rel}")
         return p
 
@@ -160,7 +161,7 @@ class _ToolEnv:
         if not vdir:
             return f"error: no skill named '{name}' is offered"
         p = (vdir / rel).resolve()
-        if not str(p).startswith(str(vdir.resolve())) or not p.is_file():
+        if not p.is_relative_to(vdir.resolve()) or not p.is_file():
             return f"error: resource '{rel}' not found for skill '{name}'"
         self.events.append(SkillEvent(t=self.turn, event="resource_read",
                                       skill=name, path=rel))
@@ -263,8 +264,12 @@ def run_rollout(lab: Lab, exp: Experiment, arm: Arm, task_id: str,
         sid, vid = parse_skill_ref(arm.skill)
         rec.skill_hash = dir_hash(lab.variant_dir(sid, vid))
 
-    client = LLMClient(model_name, exp.fixed.temperature,
-                       seed if not client_is_mock(model_name) else None)
+    client = LLMClient(
+        model_name, exp.fixed.temperature,
+        seed if not client_is_mock(model_name) else None,
+        timeout=float(lab.cfg.get("llm_timeout", 120)),
+        max_retries=int(lab.cfg.get("llm_retries", 3)),
+        cwd=str(ws))
     env = _ToolEnv(lab, ws, offered)
     messages: list[dict] = [
         {"role": "system", "content": system},
@@ -284,6 +289,9 @@ def run_rollout(lab: Lab, exp: Experiment, arm: Arm, task_id: str,
             env.turn = turn
             reply = client.complete(messages, TOOLS)
             asst: dict = {"role": "assistant", "content": reply.content}
+            if reply.input_tokens or reply.output_tokens:
+                asst["usage"] = {"input": reply.input_tokens,
+                                 "output": reply.output_tokens}
             if reply.tool_calls:
                 asst["tool_calls"] = [
                     {"id": c.id, "type": "function",
@@ -336,3 +344,73 @@ def run_experiment(lab: Lab, exp_id: str, only_arm: str | None = None,
             for i in range(n):
                 records.append(run_rollout(lab, exp, arm, task_id, i, batch))
     return records
+
+
+def planned_run_ids(exp: Experiment, arm_filter: str | None = None,
+                    limit: int | None = None,
+                    batch: str | None = None) -> list[str]:
+    """Run ids a `lab run`/`rerun` invocation would produce."""
+    ids = []
+    for arm in exp.arms:
+        if arm_filter and arm.name != arm_filter:
+            continue
+        for tid in exp.tasks:
+            n = exp.rollouts_per_arm
+            if limit:
+                n = min(n, limit)
+            for i in range(n):
+                rid = f"{exp.id}--{arm.name}--{tid}--r{i}"
+                if batch:
+                    rid += f"--{batch}"
+                ids.append(rid)
+    return ids
+
+
+def validate_experiment(lab: Lab, exp: Experiment) -> tuple[list[str],
+                                                          list[str]]:
+    """Pre-flight checks before running. Returns (errors, warnings).
+
+    Enforces the one-independent-variable rule: arms may only differ on the
+    dimension declared by `independent_var`.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    if exp.independent_var == "harness":
+        errors.append("independent_var=harness is not supported — only "
+                      "harness 'standard-tools-v1' exists")
+    if exp.rollouts_per_arm < 1:
+        errors.append("rollouts_per_arm must be >= 1")
+    if not exp.tasks:
+        errors.append("no tasks listed")
+    for tid in dict.fromkeys(exp.tasks):
+        try:
+            lab.task(tid)
+        except LabError as e:
+            errors.append(str(e))
+    for a in exp.arms:
+        if a.skill:
+            sid, vid = parse_skill_ref(a.skill)
+            try:
+                lab.variant_dir(sid, vid)
+            except LabError as e:
+                errors.append(f"arm '{a.name}': {e}")
+    dims = {
+        "skill_variant": {a.skill for a in exp.arms},
+        "model": {a.model or exp.fixed.model for a in exp.arms},
+        "injection_mode": {a.injection_mode or exp.fixed.injection_mode
+                           for a in exp.arms},
+    }
+    for dim, vals in dims.items():
+        if dim == exp.independent_var:
+            if len(vals) < 2:
+                errors.append(f"independent_var={dim} but all arms have the "
+                              f"same {dim}")
+        elif len(vals) > 1:
+            errors.append(f"arms differ in '{dim}' but independent_var="
+                          f"{exp.independent_var} — controlled comparison "
+                          "allows one variable only")
+    if exp.independent_var == "skill_variant" and not any(
+            a.skill is None for a in exp.arms):
+        warnings.append("no control arm (skill: null) — delta_vs_control "
+                        "will be skipped")
+    return errors, warnings

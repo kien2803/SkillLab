@@ -96,8 +96,38 @@ def cmd_skill_new(args) -> int:
 
 def cmd_skill_add(args) -> int:
     from .registry import add_skill
-    d = add_skill(_lab(args), Path(args.path), args.variant, args.id)
+    d = add_skill(_lab(args), args.path, args.variant, args.id)
     print(f"imported into {d}")
+    return 0
+
+
+def cmd_skill_scan(args) -> int:
+    """Discover skills in well-known locations (~/.agents/skills, .claude/…)."""
+    from .registry import scan_skill_dirs, skill_entry_file
+    from .models import parse_frontmatter
+    lab = _lab(args)
+    found = scan_skill_dirs()
+    if not found:
+        print("no skills found in known locations")
+        return 0
+    if not args.do_import:
+        for d in found:
+            entry = skill_entry_file(d)
+            fm, _ = parse_frontmatter(entry.read_text()) if entry else ({}, "")
+            print(f"{d}  ({fm.get('name') or d.name})")
+        print(f"{len(found)} skill(s) found — `lab skill scan --import` "
+              "to import all")
+        return 0
+    from .registry import add_skill
+    n = 0
+    for d in found:
+        try:
+            add_skill(lab, d)
+            n += 1
+            print(f"imported {d}")
+        except LabError as e:
+            print(f"skipped {d}: {e}", file=sys.stderr)
+    print(f"{n} skill(s) imported")
     return 0
 
 
@@ -200,13 +230,44 @@ def cmd_experiment_new(args) -> int:
     return 0
 
 
+def cmd_experiment_list(args) -> int:
+    lab = _lab(args)
+    from .report import load_runs
+    if not lab.experiments_dir.is_dir():
+        return 0
+    for d in sorted(lab.experiments_dir.iterdir()):
+        if not (d / "experiment.yaml").is_file():
+            continue
+        exp = lab.experiment(d.name)
+        n = len(load_runs(lab, exp.id))
+        print(f"{exp.id:35} {exp.status:10} arms={len(exp.arms):2} "
+              f"runs={n:3} {exp.title or exp.hypothesis[:50]}")
+    return 0
+
+
 def _run_and_eval(lab: Lab, exp: Experiment, arm_filter: str | None,
                   limit: int | None, batch: str | None,
-                  model_override: str | None) -> int:
-    from .engine import run_rollout
+                  model_override: str | None, force: bool = False) -> int:
+    from .engine import planned_run_ids, run_rollout, validate_experiment
     from .evaluate import evaluate_run
+    if exp.status == "concluded":
+        raise LabError(f"experiment '{exp.id}' is concluded (immutable) — "
+                       "start a new experiment instead of overwriting history")
+    errors, warns = validate_experiment(lab, exp)
+    for w in warns:
+        print(f"warn: {w}", file=sys.stderr)
+    if errors:
+        raise LabError("experiment invalid:\n  - " + "\n  - ".join(errors))
     if model_override:
         exp.fixed.model = model_override  # in-memory only — config unchanged
+    planned = planned_run_ids(exp, arm_filter, limit, batch)
+    existing = [r for r in planned
+                if (lab.runs_dir / r / "run.yaml").is_file()]
+    if existing and not force:
+        raise LabError(
+            f"{len(existing)}/{len(planned)} planned run(s) already exist "
+            f"(e.g. {existing[0]}) — refusing to overwrite. Use `lab rerun "
+            "--batch <name>` for a new batch, or --force to overwrite.")
     exp.status = "running"
     exp.save(lab.exp_dir(exp.id))
     done = 0
@@ -218,11 +279,15 @@ def _run_and_eval(lab: Lab, exp: Experiment, arm_filter: str | None,
                 limit, exp.rollouts_per_arm)
             for i in range(n):
                 rec = run_rollout(lab, exp, arm, tid, i, batch)
-                ev = evaluate_run(lab, rec, lab.task(tid),
-                                  lab.runs_dir / rec.run_id)
-                tag = "ERR " if rec.status == "error" else "ok  "
-                print(f"{tag}{rec.run_id} success={ev.success}"
-                      f" score={ev.rubric_score}")
+                try:
+                    ev = evaluate_run(lab, rec, lab.task(tid),
+                                      lab.runs_dir / rec.run_id)
+                    tag = "ERR " if rec.status == "error" else "ok  "
+                    print(f"{tag}{rec.run_id} success={ev.success}"
+                          f" score={ev.rubric_score}")
+                except Exception as e:  # noqa: BLE001 - don't kill the batch
+                    print(f"warn eval failed for {rec.run_id}: "
+                          f"{type(e).__name__}: {e}", file=sys.stderr)
                 done += 1
     print(f"{done} rollout(s) completed")
     return 0
@@ -231,7 +296,7 @@ def _run_and_eval(lab: Lab, exp: Experiment, arm_filter: str | None,
 def cmd_run(args) -> int:
     lab = _lab(args)
     return _run_and_eval(lab, lab.experiment(args.exp), args.arm,
-                         args.limit, args.batch, None)
+                         args.limit, args.batch, None, args.force)
 
 
 def cmd_rerun(args) -> int:
@@ -247,20 +312,35 @@ def cmd_rerun(args) -> int:
         batch = re.sub(r"[^a-z0-9-]+", "-", args.model.lower())[:40]
         print(f"note: model override without --batch → batch '{batch}'")
     if batch is None:
-        print("warning: rerun without --batch overwrites existing runs "
-              "(same run ids)", file=sys.stderr)
-    return _run_and_eval(lab, exp, args.arm, args.limit, batch, args.model)
+        print("warning: rerun without --batch reuses base run ids",
+              file=sys.stderr)
+    return _run_and_eval(lab, exp, args.arm, args.limit, batch, args.model,
+                         args.force)
 
 
 def cmd_eval(args) -> int:
-    """Re-evaluate a single run — useful while iterating on rubrics."""
-    from .evaluate import evaluate_run
+    """Re-evaluate a run, or enter human scores (--score crit=val)."""
+    from .evaluate import apply_human_scores, evaluate_run
     lab = _lab(args)
     run_dir = lab.runs_dir / args.run_id
     if not (run_dir / "run.yaml").is_file():
         raise LabError(f"run '{args.run_id}' not found")
     rec = RunRecord(**load_yaml(run_dir / "run.yaml"))
-    ev = evaluate_run(lab, rec, lab.task(rec.task), run_dir)
+    task = lab.task(rec.task)
+    if args.score:
+        scores: dict[str, float] = {}
+        for kv in args.score:
+            k, sep, v = kv.partition("=")
+            if not sep or not k:
+                raise LabError(f"--score expects 'criterion=value', got '{kv}'")
+            try:
+                scores[k] = float(v)
+            except ValueError as e:
+                raise LabError(f"--score value must be a number: '{kv}'") from e
+        ev = apply_human_scores(lab, rec, task, run_dir, scores)
+        print(f"applied human score(s): {', '.join(sorted(scores))}")
+    else:
+        ev = evaluate_run(lab, rec, task, run_dir)
     print(f"success={ev.success} rubric_score={ev.rubric_score}")
     for c in ev.checks:
         print(f"  {c.id:20} {c.method:14} passed={c.passed} score={c.score}")
@@ -451,7 +531,13 @@ def cmd_insight_new(args) -> int:
 
 def cmd_insight_list(args) -> int:
     from .insights import list_insights
+    term = (args.search or "").lower()
     for i in list_insights(_lab(args)):
+        if term:
+            hay = f"{i['id']} {i['status']} {i['confidence']} " \
+                  f"{Path(i['path']).read_text()}"
+            if term not in hay.lower():
+                continue
         print(f"{i['kind']:10} {i['status']:10} {i['confidence']:10} {i['id']}")
     return 0
 
@@ -460,6 +546,19 @@ def cmd_insight_promote(args) -> int:
     from .insights import promote
     p = promote(_lab(args), args.id)
     print(f"promoted -> {p}")
+    return 0
+
+
+def cmd_insight_refute(args) -> int:
+    from .insights import refute
+    p = refute(_lab(args), args.id)
+    print(f"refuted -> {p}")
+    return 0
+
+
+def cmd_compare(args) -> int:
+    from .report import compare_table
+    print(compare_table(_lab(args), args.exp))
     return 0
 
 
@@ -474,6 +573,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("skill"); ss = s.add_subparsers(dest="sub", required=True)
     x = ss.add_parser("new"); x.add_argument("id"); x.add_argument("--kind", default="skill-md"); x.set_defaults(f=cmd_skill_new)
     x = ss.add_parser("add"); x.add_argument("path"); x.add_argument("--variant"); x.add_argument("--id"); x.set_defaults(f=cmd_skill_add)
+    x = ss.add_parser("scan"); x.add_argument("--import", dest="do_import", action="store_true"); x.set_defaults(f=cmd_skill_scan)
     x = ss.add_parser("list"); x.set_defaults(f=cmd_skill_list)
     x = ss.add_parser("show"); x.add_argument("id"); x.set_defaults(f=cmd_skill_show)
     x = ss.add_parser("evaluate"); x.add_argument("id"); x.set_defaults(f=cmd_skill_evaluate)
@@ -489,11 +589,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("experiment"); ss = s.add_subparsers(dest="sub", required=True)
     x = ss.add_parser("new"); x.add_argument("id"); x.set_defaults(f=cmd_experiment_new)
+    x = ss.add_parser("list"); x.set_defaults(f=cmd_experiment_list)
     x = ss.add_parser("conclude"); x.add_argument("exp"); x.add_argument("--conclusion", required=True); x.add_argument("--insight", action="append"); x.set_defaults(f=cmd_experiment_conclude)
 
-    s = sub.add_parser("run"); s.add_argument("exp"); s.add_argument("--arm"); s.add_argument("--limit", type=int); s.add_argument("--batch"); s.set_defaults(f=cmd_run)
-    s = sub.add_parser("rerun"); s.add_argument("exp"); s.add_argument("--arm"); s.add_argument("--limit", type=int); s.add_argument("--model"); s.add_argument("--batch"); s.set_defaults(f=cmd_rerun)
-    s = sub.add_parser("eval"); s.add_argument("run_id"); s.set_defaults(f=cmd_eval)
+    s = sub.add_parser("run"); s.add_argument("exp"); s.add_argument("--arm"); s.add_argument("--limit", type=int); s.add_argument("--batch"); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_run)
+    s = sub.add_parser("rerun"); s.add_argument("exp"); s.add_argument("--arm"); s.add_argument("--limit", type=int); s.add_argument("--model"); s.add_argument("--batch"); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_rerun)
+    s = sub.add_parser("eval"); s.add_argument("run_id"); s.add_argument("--score", action="append"); s.set_defaults(f=cmd_eval)
+    s = sub.add_parser("compare"); s.add_argument("exp"); s.set_defaults(f=cmd_compare)
     s = sub.add_parser("transcript"); s.add_argument("run_id"); s.add_argument("--full", action="store_true"); s.set_defaults(f=cmd_transcript)
     s = sub.add_parser("diff"); s.add_argument("run_a"); s.add_argument("run_b"); s.set_defaults(f=cmd_diff)
     s = sub.add_parser("status"); s.set_defaults(f=cmd_status)
@@ -506,9 +608,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("insight"); ss = s.add_subparsers(dest="sub", required=True)
     x = ss.add_parser("new"); x.add_argument("title"); x.add_argument("--evidence"); x.set_defaults(f=cmd_insight_new)
-    x = ss.add_parser("list"); x.set_defaults(f=cmd_insight_list)
+    x = ss.add_parser("list"); x.add_argument("--search"); x.set_defaults(f=cmd_insight_list)
     x = ss.add_parser("show"); x.add_argument("id"); x.set_defaults(f=cmd_insight_show)
     x = ss.add_parser("promote"); x.add_argument("id"); x.set_defaults(f=cmd_insight_promote)
+    x = ss.add_parser("refute"); x.add_argument("id"); x.set_defaults(f=cmd_insight_refute)
     return p
 
 

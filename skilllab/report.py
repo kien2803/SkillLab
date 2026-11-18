@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import math
 import statistics
 from pathlib import Path
 
-from .lab import Lab
-from .models import EvalResult, Experiment, RunRecord, load_yaml
+from .lab import Lab, LabError
+from .models import (EvalResult, Experiment, RunRecord, est_tokens, load_yaml,
+                     parse_skill_ref)
+from .registry import skill_entry_file
 
 
 def load_runs(lab: Lab, exp_id: str) -> list[tuple[RunRecord, EvalResult | None]]:
     out = []
+    if not lab.runs_dir.is_dir():
+        return out
     for d in sorted(lab.runs_dir.iterdir()):
         ry = d / "run.yaml"
         if not ry.is_file():
@@ -34,6 +39,32 @@ def _fmt(x: float | None, pct: bool = False) -> str:
     if x is None:
         return "—"
     return f"{x:.0%}" if pct else f"{x:.2f}"
+
+
+def _load_cost(lab: Lab, rec: RunRecord,
+               activated: set[str]) -> float | None:
+    """Estimated tokens the skill occupied in context: entry file plus the
+    resources actually read. Counted when the skill is in context — always
+    for injected mode, only on activation for available mode."""
+    if not rec.skill_ref:
+        return None
+    sid, vid = parse_skill_ref(rec.skill_ref)
+    if rec.injection_mode == "available" and sid not in activated:
+        return None
+    try:
+        vdir = lab.variant_dir(sid, vid)
+    except LabError:
+        return None
+    entry = skill_entry_file(vdir)
+    if entry is None:
+        return None
+    cost = est_tokens(entry.read_text())
+    for e in rec.skill_events:
+        if e.event == "resource_read" and e.skill == sid and e.path:
+            p = vdir / e.path
+            if p.is_file():
+                cost += est_tokens(p.read_text())
+    return float(cost)
 
 
 def build_report(lab: Lab, exp: Experiment) -> str:
@@ -72,42 +103,59 @@ def build_report(lab: Lab, exp: Experiment) -> str:
 
     def metrics(rows):
         errs = sum(1 for r, _ in rows if r.status == "error")
-        act, false_act = [], []
-        scores, succ, toks, turns = [], [], [], []
+        act, false_act, tta = [], [], []
+        scores, succ, toks, turns, load = [], [], [], [], []
         for rec, ev in rows:
-            toks.append(rec.usage.input_tokens + rec.usage.output_tokens)
-            turns.append(rec.usage.turns)
+            activated = {e.skill for e in rec.skill_events
+                         if e.event == "activated"}
+            if rec.status != "error":
+                toks.append(rec.usage.input_tokens + rec.usage.output_tokens)
+                turns.append(rec.usage.turns)
             if (rec.task in pos_tasks or rec.task in neg_tasks) \
                     and rec.injection_mode == "available":
-                activated = {e.skill for e in rec.skill_events
-                             if e.event == "activated"}
-                task_spec = lab.task(rec.task)
-                for sid in task_spec.skill_relevance.expected:
-                    if rec.task in pos_tasks:
-                        act.append(1.0 if sid in activated else 0.0)
-                for sid in task_spec.skill_relevance.unexpected:
-                    false_act.append(1.0 if sid in activated else 0.0)
-            if ev:
+                try:
+                    task_spec = lab.task(rec.task)
+                except LabError:
+                    task_spec = None  # task deleted after the run
+                if task_spec is not None:
+                    for sid in task_spec.skill_relevance.expected:
+                        if rec.task in pos_tasks:
+                            act.append(1.0 if sid in activated else 0.0)
+                            if sid in activated:
+                                tta.append(min(
+                                    e.t for e in rec.skill_events
+                                    if e.event == "activated"
+                                    and e.skill == sid))
+                    for sid in task_spec.skill_relevance.unexpected:
+                        false_act.append(1.0 if sid in activated else 0.0)
+            cost = _load_cost(lab, rec, activated)
+            if cost is not None:
+                load.append(cost)
+            if ev and rec.status != "error":
                 if ev.rubric_score is not None:
                     scores.append(ev.rubric_score)
                 succ.append(1.0 if ev.success else 0.0)
         return {
             "n": len(rows), "errs": errs, "act": _mean(act),
-            "false_act": _mean(false_act), "score": _mean(scores),
-            "succ": _mean(succ), "toks": _mean(toks), "turns": _mean(turns),
+            "false_act": _mean(false_act), "tta": _mean(tta),
+            "score": _mean(scores), "succ": _mean(succ),
+            "toks": _mean(toks), "load": _mean(load),
+            "turns": _mean(turns),
             "var": statistics.pstdev(scores) if len(scores) > 1 else None,
         }
 
     def row_cells(name, m):
         return (f"| {name} | {m['n']} | {m['errs']} | {_fmt(m['act'], 1)}"
-                f" | {_fmt(m['false_act'], 1)} | {_fmt(m['score'])}"
+                f" | {_fmt(m['false_act'], 1)} | {_fmt(m['tta'])}"
+                f" | {_fmt(m['score'])}"
                 f" | {_fmt(m['succ'], 1)} | {_fmt(m['toks'])}"
+                f" | {_fmt(m['load'])}"
                 f" | {_fmt(m['turns'])} | {_fmt(m['var'])} |")
 
     lines += ["## Arms", "",
-              "| arm | n | err | activation | false-act | rubric | success |"
-              " tokens | turns | variance |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
+              "| arm | n | err | activation | false-act | act@turn | rubric |"
+              " success | tokens | load-cost | turns | variance |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
 
     arm_scores: dict[str, float | None] = {}
     arm_rates: dict[str, dict] = {}
@@ -118,28 +166,53 @@ def build_report(lab: Lab, exp: Experiment) -> str:
                                "var": m["var"]}
         lines.append(row_cells(arm.name, m))
 
-    # multi-model comparison: same arms, different models (e.g. rerun --model)
-    by_model: dict[str, list] = {}
+    # multi-model comparison: same arms, different models (e.g. rerun
+    # --model). Group by (model, arm) so treatments don't pool with controls.
+    by_model_arm: dict[tuple[str, str], list] = {}
+    models_seen = set()
     for r in runs:
-        by_model.setdefault(r[0].model.get("name", "?"), []).append(r)
-    if len(by_model) > 1:
-        lines += ["", "## By model", "",
-                  "| model | n | err | activation | false-act | rubric |"
-                  " success | tokens | turns | variance |",
-                  "|---|---|---|---|---|---|---|---|---|---|"]
-        for name, rows in sorted(by_model.items()):
-            lines.append(row_cells(name, metrics(rows)))
+        mname = r[0].model.get("name", "?")
+        models_seen.add(mname)
+        by_model_arm.setdefault((mname, r[0].arm), []).append(r)
+    if len(models_seen) > 1:
+        lines += ["", "## By model (per arm)", "",
+                  "| model · arm | n | err | activation | false-act |"
+                  " act@turn | rubric | success | tokens | load-cost |"
+                  " turns | variance |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        for (mname, aname), rows in sorted(by_model_arm.items()):
+            lines.append(row_cells(f"{mname} · {aname}", metrics(rows)))
 
-    # delta vs first arm with skill=None (control)
+    # delta vs first arm with skill=None (control) + Welch CI
+    def arm_score_list(name: str) -> list[float]:
+        xs = []
+        for rec, ev in by_arm.get(name, []):
+            if rec.status == "error" or not ev \
+                    or ev.rubric_score is None:
+                continue
+            xs.append(ev.rubric_score)
+        return xs
+
     ctrl = next((a for a in exp.arms if a.skill is None), exp.arms[0])
-    if ctrl.name in arm_scores and arm_scores[ctrl.name] is not None:
+    ctrl_xs = arm_score_list(ctrl.name)
+    if ctrl.name in arm_scores and ctrl_xs:
         lines += ["", "## Delta vs control "
                   f"(`{ctrl.name}`)", ""]
         for a in exp.arms:
-            if a.name == ctrl.name or arm_scores.get(a.name) is None:
+            xs = arm_score_list(a.name)
+            if a.name == ctrl.name or not xs:
                 continue
-            d = arm_scores[a.name] - arm_scores[ctrl.name]  # type: ignore[operator]
-            lines.append(f"- `{a.name}`: {d:+.2f} rubric")
+            d = statistics.mean(xs) - statistics.mean(ctrl_xs)
+            if len(xs) >= 2 and len(ctrl_xs) >= 2:
+                se = math.sqrt(statistics.variance(xs) / len(xs)
+                               + statistics.variance(ctrl_xs)
+                               / len(ctrl_xs))
+                lines.append(f"- `{a.name}`: {d:+.2f} rubric "
+                             f"(95% CI ±{1.96 * se:.2f}, "
+                             f"n={len(xs)}v{len(ctrl_xs)})")
+            else:
+                lines.append(f"- `{a.name}`: {d:+.2f} rubric "
+                             "(n too small for CI)")
 
     if usage:
         lines += ["", "## Skill usage", ""]
@@ -183,10 +256,33 @@ def build_report(lab: Lab, exp: Experiment) -> str:
     # warnings — the lab should discourage weak conclusions
     warns = []
     for arm in exp.arms:
-        n = len(by_arm.get(arm.name, []))
+        rows = by_arm.get(arm.name, [])
+        n = len(rows)
         if 0 < n < 3:
             warns.append(f"arm `{arm.name}` has only {n} run(s) — "
                          "conclusions from n<3 are unreliable")
+        if n and not arm_score_list(arm.name):
+            warns.append(f"arm `{arm.name}` has {n} run(s) but no rubric "
+                         "scores — outcome data insufficient (missing "
+                         "rubric or all runs errored)")
+    # tasks that can't tell arms apart aren't measuring anything
+    for t in exp.tasks:
+        try:
+            if lab.task(t).kind != "performance":
+                continue
+        except LabError:
+            continue
+        means = []
+        for a in exp.arms:
+            xs = [ev.rubric_score for rec, ev in by_arm.get(a.name, [])
+                  if rec.task == t and rec.status != "error"
+                  and ev and ev.rubric_score is not None]
+            if xs:
+                means.append(statistics.mean(xs))
+        if len(means) >= 2 and max(means) - min(means) < 0.05:
+            warns.append(f"task '{t}' shows no score spread across arms "
+                         "(<0.05) — it may not discriminate; consider a "
+                         "harder or more targeted task")
     if warns:
         lines += ["", "## Warnings", ""] + [f"- {w}" for w in warns]
 
@@ -204,3 +300,38 @@ def write_report(lab: Lab, exp_id: str) -> Path:
     p = lab.exp_dir(exp_id) / "analysis.md"
     p.write_text(text)
     return p
+
+
+def compare_table(lab: Lab, exp_id: str) -> str:
+    """Pivot table: mean score ± stdev per arm × task (run-level variance)."""
+    exp = lab.experiment(exp_id)
+    runs = load_runs(lab, exp_id)
+    cells: dict[tuple[str, str], list[float]] = {}
+    tasks: list[str] = []
+    for rec, ev in runs:
+        if rec.status == "error" or not ev:
+            continue
+        s = ev.rubric_score if ev.rubric_score is not None else (
+            1.0 if ev.success else 0.0)
+        cells.setdefault((rec.arm, rec.task), []).append(s)
+        if rec.task not in tasks:
+            tasks.append(rec.task)
+    out = [f"# Compare: {exp_id}", ""]
+    if not cells:
+        out.append("(no scored runs)")
+        return "\n".join(out) + "\n"
+    out.append("| arm | " + " | ".join(tasks) + " |")
+    out.append("|" + "---|" * (len(tasks) + 1))
+    for arm in exp.arms:
+        row = [arm.name]
+        for t in tasks:
+            xs = cells.get((arm.name, t), [])
+            if not xs:
+                row.append("—")
+            elif len(xs) > 1:
+                row.append(f"{statistics.mean(xs):.2f}±"
+                           f"{statistics.pstdev(xs):.2f}")
+            else:
+                row.append(f"{xs[0]:.2f}")
+        out.append("| " + " | ".join(row) + " |")
+    return "\n".join(out) + "\n"

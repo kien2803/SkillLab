@@ -13,6 +13,8 @@ DEFAULT_CONFIG = {
     "rollouts_per_arm": 5,
     "max_turns": 15,
     "sandbox": None,           # "bwrap" for isolated run_command
+    "llm_timeout": 120,        # seconds per LLM call (rollout + judge)
+    "llm_retries": 3,          # retries on transient API errors
     "analysis": {
         "skill_md_max_lines": 500,
         "skill_md_token_warn": 2000,
@@ -75,6 +77,8 @@ class Lab:
             "temperature: 0.0\n"
             "rollouts_per_arm: 5\n"
             "max_turns: 15\n"
+            "llm_timeout: 120      # seconds per LLM call\n"
+            "llm_retries: 3        # retries on transient API errors\n"
             "# sandbox: bwrap       # isolate run_command: no network, ro system\n"
         )
         for d in DIRS:
