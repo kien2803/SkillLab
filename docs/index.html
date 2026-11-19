@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en" data-type="software" data-radius="sharp" data-buttons="arrow">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="site-kind" content="software">
+<meta name="page-kind" content="software">
+<title>SkillLab: regression testing for agent skills</title>
+<meta name="description" content="Run a new skill variant and its baseline through the same tasks, model and rollouts. SkillLab hands you the diff in 6 categories, task by task.">
+<meta name="theme-color" content="#0b0c0e">
+<meta property="og:title" content="SkillLab: regression testing for agent skills">
+<meta property="og:description" content="Run a new skill variant and its baseline through the same tasks, model and rollouts. The report hands you the diff, task by task.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%231f2de6'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='20' fill='white' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400..700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/system.css">
+<link rel="stylesheet" href="assets/ui/base.css">
+<link rel="stylesheet" href="assets/ui/window/fragment.css">
+<link rel="stylesheet" href="assets/ui/checklist/fragment.css">
+<link rel="stylesheet" href="assets/ui/stat/fragment.css">
+<link rel="stylesheet" href="assets/ui/notify/fragment.css">
+<link rel="stylesheet" href="assets/ui/files/fragment.css">
+<link rel="stylesheet" href="assets/ui/terminal-run/fragment.css">
+<link rel="stylesheet" href="assets/ui/cards.css">
+<link rel="stylesheet" href="assets/motion/motion.css">
+<link rel="stylesheet" href="assets/backgrounds/backgrounds.css">
+<link rel="stylesheet" href="assets/diagrams/diagram.css">
+<link rel="stylesheet" href="assets/layout/layout.css">
+<style>
+:root {
+  --p-bg: #eef0f3; --p-surface: #e2e5ea; --p-ink: #0b0c0e; --p-muted: #5d6470;
+  --p-accent: #1f2de6; --p-accent-ink: #ffffff; --p-action: #1f2de6; --p-action-ink: #ffffff;
+  --p-inv-bg: #0b0c0e; --p-inv-surface: #17181a; --p-inv-ink: #eef0f3; --p-inv-muted: #8e8f92;
+  --p-inv-accent: #eef0f3; --p-inv-accent-ink: #0b0c0e; --p-inv-action: #eef0f3; --p-inv-action-ink: #0b0c0e;
+  --font-display: "Familjen Grotesk", system-ui, sans-serif;
+  --font-text: "Familjen Grotesk", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --display-weight: 400;
+  --display-tracking: -0.03em;
+  --display-tracking-xl: -0.04em;
+  --c-regress: #9a2828; --c-pass: #1d7a46; --c-warn: #6d4e0c;
+}
+</style>
+<link rel="stylesheet" href="page.css">
+<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
+<script src="assets/backgrounds/backgrounds.js"></script>
+<script>document.documentElement.classList.add('mo-js');setTimeout(()=>document.documentElement.classList.add('mo-safe'),2500)</script>
+<link rel="modulepreload" href="assets/moments/moments.js">
+<link rel="modulepreload" href="assets/moments/lib.js">
+<link rel="modulepreload" href="assets/moments/pinned-chapters/moment.js">
+</head>
+<body class="bg-paper bg-topglow">
+<!-- type: software
+     deal: hero triptych, nav nav-centre, close close-type, footer footer-dark, rhythm dark-band,
+           buttons arrow, mark initial, grounds paper + topglow
+     moment: pinned-chapters (#loop)
+     effect: grain-gradient (hero collage panel)
+     palette: cool-grey-cobalt · type: familjen · radius: sharp
+     all names and numbers on this page come from examples/demo-lab (model: mock, simulated) -->
+<header class="nav nav--centre">
+  <div class="wrap nav__bar">
+    <a class="skip-link" href="#top">Skip to content</a>
+    <a class="nav__logo" href="#top"><span class="mark mark--initial" aria-hidden="true">S</span>SkillLab</a>
+    <nav class="nav__links" aria-label="Main">
+      <div class="nav__item"><a class="nav__link" href="#report">Report</a></div>
+      <div class="nav__item"><a class="nav__link" href="#measured">Metrics</a></div>
+      <div class="nav__item"><a class="nav__link" href="#loop">Loop</a></div>
+      <div class="nav__item"><a class="nav__link" href="#pipeline">Pipeline</a></div>
+      <div class="nav__item"><a class="nav__link" href="#faq">Questions</a></div>
+    </nav>
+    <div class="nav__actions">
+      <a class="btn btn--primary" href="https://github.com/kien2803/SkillLab">Try the quickstart<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a>
+    </div>
+    <button class="nav__toggle" type="button" aria-expanded="false" aria-label="Menu"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero hero--triptych" data-enter aria-labelledby="hero-h">
+    <div class="wrap"><div class="hero-text grid hero__grid">
+      <div class="span-3">
+        <h1 id="hero-h">Regression testing for agent skills</h1>
+        <p class="hero__lead">Run a new variant and its baseline through the same tasks, model and rollouts. SkillLab hands you the diff in 6 categories, task by task.</p>
+      </div>
+      <div class="ly-collage span-6 start-4" role="img" aria-label="SkillLab screens: a regression diff, a task list, eval checks and the quickstart commands">
+        <div class="ly-collage__set is-on">
+          <div class="ly-piece ui pc-report" style="left: 4%; top: 6%; width: 56%">
+            <div class="pc-row pc-row--head"><span>write-commit-msg</span><span>v1</span><span>v2-bad</span><span>&Delta;</span></div>
+            <div class="pc-row"><span>activated</span><b>100%</b><b>0%</b><em class="is-bad">-1.00</em></div>
+            <div class="pc-row"><span>success</span><b>100%</b><b>100%</b><em>+0.00</em></div>
+            <div class="pc-row"><span>score</span><b>1.00</b><b>1.00</b><em>+0.00</em></div>
+            <div class="pc-row"><span>tokens</span><b>206.5</b><b>178.5</b><em>-14%</em></div>
+          </div>
+          <div class="ly-piece ui pc-verdict" style="left: 63%; top: 12%; width: 33%">
+            <span class="pc-chip pc-chip--bad">Regressed</span>
+            <span class="pc-sub">activation &middot; 1 task</span>
+            <span class="pc-mono">reg-commit-helper-v1-v2-bad-01</span>
+          </div>
+          <div class="ly-piece ui pc-term" style="left: 8%; top: 60%; width: 54%">
+            <div class="pc-ln"><i>&#8250;</i> lab regression run commit-helper --baseline v1 --candidate v2-bad</div>
+            <div class="pc-ln"><i>&#8250;</i> baseline arm: 2 tasks &times; 3 rollouts</div>
+            <div class="pc-ln"><i>&#8250;</i> candidate arm: 2 tasks &times; 3 rollouts</div>
+            <div class="pc-ln pc-ln--dim">verdict: <b>regressed</b> &mdash; 1 category</div>
+          </div>
+          <div class="ly-piece ui pc-eval" style="left: 62%; top: 32%; width: 34%">
+            <div class="pc-chk is-pass"><i></i><span>file-exists</span><b>passed</b></div>
+            <div class="pc-chk is-pass"><i></i><span>content-match</span><b>passed</b></div>
+            <div class="pc-chk is-pass"><i></i><span>judge-quality</span><b>0.92</b></div>
+            <div class="pc-chk is-pend"><i></i><span>human-review</span><b>pending</b></div>
+          </div>
+          <div class="ly-piece ui pc-skill" style="left: 66%; top: 64%; width: 32%">
+            <span class="pc-lbl">skills/commit-helper/v2-bad/SKILL.md</span>
+            <div class="pc-code">name: commit-helper<br>triggers: commit-msg<br><span class="is-del">- write, chore, fix</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="span-3 start-10 hero__cta"><a class="btn btn--primary" href="https://github.com/kien2803/SkillLab">Try the quickstart<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></div>
+    </div></div>
+  </section>
+
+  <section class="section" id="report" aria-labelledby="report-h">
+    <div class="wrap">
+      <div class="grid grid--top">
+        <div class="span-5"><h2 id="report-h">The report is the product.</h2></div>
+        <div class="span-6 start-7"><p class="muted">Every verdict points at the runs, checks and transcripts behind it. Nothing collapses into one aggregate score. This one is real output from the demo lab &mdash; model <b>mock</b>, results simulated.</p></div>
+      </div>
+      <div class="ui app fill" role="img" aria-label="A SkillLab regression report: the run list beside the open task diff for write-commit-msg" data-ui-pause-host>
+        <div class="app__pane app__pane--list">
+          <div class="ui ui-panel ui-win" data-ui="window" data-open="Open" data-work="Running" data-done="Done">
+            <div class="ui-win__bar">
+              <span class="ui-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="ui-win__crumb"><b>reg-commit-helper-v1-v2-bad-01</b></span>
+              <span class="ui-spacer"></span>
+              <span class="ui-win__search" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg><span class="ui-win__ph">Filter</span><span class="ui-kbd">/</span></span>
+            </div>
+            <div class="ui-win__body">
+              <nav class="ui-win__side" aria-hidden="true">
+                <span class="ui-win__nav is-on"><svg class="ui-icon" viewBox="0 0 16 16"><path d="M2.5 9h3l1 1.5h3l1-1.5h3"/><path d="M2.5 9 4 3.5h8L13.5 9v3.5h-11z"/></svg>Runs<em>12</em></span>
+                <span class="ui-win__nav"><svg class="ui-icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/></svg>Pending<em>0</em></span>
+                <span class="ui-win__nav"><svg class="ui-icon" viewBox="0 0 16 16"><path d="m3.5 8.4 2.8 2.8 6.2-6.4"/></svg>Evaluated</span>
+                <span class="ui-win__label">Views</span>
+                <span class="ui-win__nav"><span class="ui-win__hash">#</span>baseline</span>
+                <span class="ui-win__nav"><span class="ui-win__hash">#</span>candidate</span>
+                <span class="ui-win__nav"><span class="ui-win__hash">#</span>regressed</span>
+              </nav>
+              <div class="ui-win__main">
+                <div class="ui-win__cols" aria-hidden="true"><span>Task</span><span>Arm</span><span>Status</span><span>Model</span></div>
+                <ul class="ui-win__rows">
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="1">W0</span><span class="ui-win__who">write-commit-msg</span><span class="ui-win__sub">baseline &middot; r0</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="1">W1</span><span class="ui-win__who">write-commit-msg</span><span class="ui-win__sub">baseline &middot; r1</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="1">W2</span><span class="ui-win__who">write-commit-msg</span><span class="ui-win__sub">baseline &middot; r2</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="4">U0</span><span class="ui-win__who">unrelated-refactor</span><span class="ui-win__sub">baseline &middot; r0</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="4">U1</span><span class="ui-win__who">unrelated-refactor</span><span class="ui-win__sub">baseline &middot; r1</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="4">U2</span><span class="ui-win__who">unrelated-refactor</span><span class="ui-win__sub">baseline &middot; r2</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="2">W0</span><span class="ui-win__who">write-commit-msg</span><span class="ui-win__sub">candidate &middot; r0</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="2">W1</span><span class="ui-win__who">write-commit-msg</span><span class="ui-win__sub">candidate &middot; r1</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="2">W2</span><span class="ui-win__who">write-commit-msg</span><span class="ui-win__sub">candidate &middot; r2</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="3">U0</span><span class="ui-win__who">unrelated-refactor</span><span class="ui-win__sub">candidate &middot; r0</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="3">U1</span><span class="ui-win__who">unrelated-refactor</span><span class="ui-win__sub">candidate &middot; r1</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                  <li class="ui-win__row" data-row><span class="ui-avatar" data-tone="3">U2</span><span class="ui-win__who">unrelated-refactor</span><span class="ui-win__sub">candidate &middot; r2</span><span class="ui-win__st" data-st>Passed</span><span class="ui-win__age">mock</span></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="app__pane app__pane--open" data-ui-loop>
+          <div class="ui ui-panel reg-open">
+            <div class="reg-open__head">
+              <div class="reg-open__crumb">write-commit-msg <span class="muted">activation-positive</span></div>
+              <span class="pc-chip pc-chip--bad">Regressed &middot; activation</span>
+            </div>
+            <div class="reg-open__grid" aria-hidden="true">
+              <span class="reg-open__c reg-open__c--h"></span><span class="reg-open__c reg-open__c--h">v1</span><span class="reg-open__c reg-open__c--h">v2-bad</span><span class="reg-open__c reg-open__c--h">&Delta;</span>
+              <span class="reg-open__c">activated</span><span class="reg-open__c">100%</span><span class="reg-open__c">0%</span><span class="reg-open__c is-bad">-1.00</span>
+              <span class="reg-open__c">success</span><span class="reg-open__c">100%</span><span class="reg-open__c">100%</span><span class="reg-open__c">+0.00</span>
+              <span class="reg-open__c">score</span><span class="reg-open__c">1.00</span><span class="reg-open__c">1.00</span><span class="reg-open__c">+0.00</span>
+              <span class="reg-open__c">tokens</span><span class="reg-open__c">206.5</span><span class="reg-open__c">178.5</span><span class="reg-open__c">-14%</span>
+              <span class="reg-open__c">turns</span><span class="reg-open__c">3.00</span><span class="reg-open__c">2.00</span><span class="reg-open__c">-33%</span>
+              <span class="reg-open__c">variance</span><span class="reg-open__c">0.00</span><span class="reg-open__c">0.00</span><span class="reg-open__c">+0.00</span>
+            </div>
+            <div class="reg-open__ev">
+              <div class="reg-open__evln"><b>evidence</b><span>candidate ran 3/3 rollouts without calling read_skill; checks still passed on both arms</span></div>
+              <div class="reg-open__evln"><b>baseline runs</b><span class="mono">--baseline--write-commit-msg--r0&hellip;r2</span></div>
+              <div class="reg-open__evln"><b>candidate runs</b><span class="mono">--candidate--write-commit-msg--r0&hellip;r2</span></div>
+              <div class="reg-open__evln"><b>artifacts</b><span>workspace diff: no changed files between arms</span></div>
+              <div class="reg-open__evln reg-open__evln--mock"><b>model</b><span>mock &mdash; simulated results, not real-world performance</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="measured" aria-labelledby="measured-h">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 id="measured-h">Four metrics on every run. <span class="muted">Per task, per arm.</span></h2>
+      </div>
+      <div class="grid">
+        <article class="card card--row card--open span-6">
+          <h3>Eval checks</h3>
+          <p>Deterministic checks, an LLM judge or a human reviewer. Nothing passes on a file existing alone.</p>
+          <div class="panel"><div class="stage stage--fade-b"><div class="at-rise fit" style="--ax:32px;--ay:40px;--fit-max:400px" data-ui-loop>
+            <div class="ui ui-panel ui-checks" data-ui="checklist">
+              <div class="ui-checks__head"><div class="ui-title">eval.yaml &middot; write-commit-msg &middot; r0</div><span class="ui-spacer"></span><div class="ui-meta" data-checks-count>3 of 3</div></div>
+              <div class="ui-checks__bar"><i data-checks-bar style="--k:1"></i></div>
+              <ul class="ui-checks__list">
+                <li class="ui-check is-done"><span class="ui-check__box"><svg viewBox="0 0 16 16"><path d="m4.5 8.2 2.3 2.3 4.7-5"/></svg></span><span class="ui-check__label">file-exists: COMMIT_MSG.txt</span></li>
+                <li class="ui-check is-done"><span class="ui-check__box"><svg viewBox="0 0 16 16"><path d="m4.5 8.2 2.3 2.3 4.7-5"/></svg></span><span class="ui-check__label">content-match: conventional format</span></li>
+                <li class="ui-check is-done"><span class="ui-check__box"><svg viewBox="0 0 16 16"><path d="m4.5 8.2 2.3 2.3 4.7-5"/></svg></span><span class="ui-check__label">judge-quality: 0.92 on 0..1</span></li>
+              </ul>
+            </div>
+          </div></div></div>
+        </article>
+        <article class="card card--row card--open span-6">
+          <h3>Activation recall</h3>
+          <p>Recall on tasks that need the skill, false activation on tasks that do not. Two numbers, not one.</p>
+          <div class="panel"><div class="stage stage--fade-b"><div class="at-corner to-edge fit" style="--ax:32px;--ay:56px;--fit-max:420px">
+            <div class="ui ui-panel ui-stat" data-ui="stat" data-from="100" data-to="0" data-suffix="%" data-values="100,100,100,0,0,0" data-ui-opts='{"fill":true}'>
+              <div class="ui-stat__head">
+                <div class="ui-stat__top"><span class="ui-stat__label">Activation recall &middot; write-commit-msg</span><span class="ui-stat__range">6 rollouts<svg class="ui-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></svg></span></div>
+                <div class="ui-stat__line"><span class="ui-stat__num" data-stat-num>0%</span><span class="ui-chip ui-chip--plain ui-stat__delta"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 2.5v7M3 6.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>-100 pts</span><span class="ui-stat__sub">v2-bad vs v1</span></div>
+              </div>
+              <div class="ui-stat__chart"><svg class="ui-stat__svg" viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true"><path class="ui-stat__grid" d="M0 30.5H400M0 60.5H400M0 90.5H400"/><path class="ui-stat__cover" fill-rule="evenodd" d=""/><g class="ui-stat__bars"></g></svg><div class="ui-stat__axis" aria-hidden="true"><span>v1</span><span></span><span>v2-bad</span></div></div>
+            </div>
+          </div></div></div>
+        </article>
+        <article class="card card--row card--open span-6">
+          <h3>Regression categories</h3>
+          <p>Six regression categories: critical, quality, activation, false activation, efficiency, stability.</p>
+          <div class="panel"><div class="stage stage--fade-b"><div class="at-rise fit" style="--ax:32px;--ay:calc(100% - 180px);--ay-sm:calc(100% - 180px);--fit-max:380px" data-ui-opts='{"items":[["<span class=\"ui-note__ico\"><svg class=\"ui-icon\" viewBox=\"0 0 16 16\"><path d=\"M8 2.5 14 13.5H2z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linejoin=\"round\"/><path d=\"M8 7v3M8 11.6v.4\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/></svg></span>","activation: <b>-1.00</b> on write-commit-msg","candidate never called read_skill in 3 rollouts"],["<span class=\"ui-note__ico\"><svg class=\"ui-icon\" viewBox=\"0 0 16 16\"><path d=\"M8 2.5 14 13.5H2z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linejoin=\"round\"/><path d=\"M8 7v3M8 11.6v.4\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"/></svg></span>","efficiency: turns <b>-33%</b>","3.0 to 2.0 turns per run"],["<span class=\"ui-note__ico\"><svg class=\"ui-icon\" viewBox=\"0 0 16 16\"><path d=\"m3.5 8.4 2.8 2.8 6.2-6.4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"/></svg></span>","unrelated-refactor unchanged","activation 0% to 0%, success 100%"]]}'>
+            <div class="ui ui-notify" data-ui="notify"><ul class="ui-notify__list" data-notify-list>
+              <li class="ui-note"><span class="ui-note__ico"><svg class="ui-icon" viewBox="0 0 16 16"><path d="M8 2.5 14 13.5H2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 7v3M8 11.6v.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="ui-note__text"><span class="ui-note__title">activation: -1.00 on write-commit-msg<time>now</time></span><span class="ui-note__body">candidate never called read_skill in 3 rollouts</span></span></li>
+              <li class="ui-note"><span class="ui-note__ico"><svg class="ui-icon" viewBox="0 0 16 16"><path d="M8 2.5 14 13.5H2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 7v3M8 11.6v.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="ui-note__text"><span class="ui-note__title">efficiency: turns -33%<time>then</time></span><span class="ui-note__body">3.0 to 2.0 turns per run</span></span></li>
+              <li class="ui-note"><span class="ui-note__ico"><svg class="ui-icon" viewBox="0 0 16 16"><path d="m3.5 8.4 2.8 2.8 6.2-6.4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span><span class="ui-note__text"><span class="ui-note__title">unrelated-refactor unchanged<time>then</time></span><span class="ui-note__body">activation 0% to 0%, success 100%</span></span></li>
+            </ul></div>
+          </div></div></div>
+        </article>
+        <article class="card card--row card--open span-6">
+          <h3>Evidence on disk</h3>
+          <p>Run ids, transcripts, eval files and workspace diffs stay on disk. History is append only.</p>
+          <div class="panel"><div class="stage stage--fade-b"><div class="at-rise fit" style="--ax:32px;--ay:40px;--fit-max:380px">
+            <div class="ui ui-files" data-ui="files" data-reading="Reading {n} of {total}">
+              <div class="ui-files__status"><span class="ui-dot"></span><span data-files-status>12 runs kept</span></div>
+              <ul class="ui-files__grid">
+                <li class="ui-file is-done"><span class="ui-file__icon"><svg class="ui-file__glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.25 2.75h8L18.75 7.25v14H6.25z"/><path d="M14 2.75v4.75h4.75M9 12.5h6.5M9 15.5h6.5"/></svg></span><span class="ui-file__name">run.yaml</span><span class="ui-file__kind">metadata</span><span class="ui-file__bar"><i></i></span><span class="ui-file__check"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 8.2 2.3 2.3 4.7-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></li>
+                <li class="ui-file is-done"><span class="ui-file__icon"><svg class="ui-file__glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.25 2.75h8L18.75 7.25v14H6.25z"/><path d="M14 2.75v4.75h4.75M9 12.5h6.5M9 15.5h6.5M9 18.5h4"/></svg></span><span class="ui-file__name">eval.yaml</span><span class="ui-file__kind">checks</span><span class="ui-file__bar"><i></i></span><span class="ui-file__check"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 8.2 2.3 2.3 4.7-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></li>
+                <li class="ui-file is-done"><span class="ui-file__icon"><svg class="ui-file__glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.25 2.75h8L18.75 7.25v14H6.25z"/><path d="M14 2.75v4.75h4.75M9 12.5h6.5M9 15.5h6.5M9 18.5h4"/></svg></span><span class="ui-file__name">transcript.md</span><span class="ui-file__kind">turns</span><span class="ui-file__bar"><i></i></span><span class="ui-file__check"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 8.2 2.3 2.3 4.7-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></li>
+                <li class="ui-file is-done"><span class="ui-file__icon"><svg class="ui-file__glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.25 2.75h8L18.75 7.25v14H6.25z"/><path d="M14 2.75v4.75h4.75"/></svg></span><span class="ui-file__name">regression.yaml</span><span class="ui-file__kind">verdict</span><span class="ui-file__bar"><i></i></span><span class="ui-file__check"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 8.2 2.3 2.3 4.7-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></li>
+              </ul>
+            </div>
+          </div></div></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="loop" style="--h: 2" data-moment="pinned-chapters" aria-labelledby="loop-h">
+    <div class="wrap mo-pc__grid">
+      <div class="mo-pc__text">
+        <h2 id="loop-h">The run loop, in one command</h2>
+        <ol class="mo-pc__steps">
+          <li class="mo-pc__step">
+            <h3>Edit the variant</h3>
+            <p>Copy the skill, change the trigger words. v2-bad drops the commit verbs from its SKILL.md.</p>
+            <figure class="mo-pc__visual mo-pc__visual--lit is-on"><div class="pc-skill pc-skill--card ui"><span class="pc-lbl">skills/commit-helper/v2-bad/SKILL.md</span><div class="pc-code">name: commit-helper<br>triggers: commit-msg<br><span class="is-del">- write, chore, fix</span></div></div></figure>
+          </li>
+          <li class="mo-pc__step">
+            <h3>Run both arms</h3>
+            <p>One command rolls out baseline and candidate on the same tasks, model and rollouts.</p>
+            <figure class="mo-pc__visual mo-pc__visual--lit"><div class="pc-term pc-term--card ui"><div class="pc-ln"><i>&#8250;</i> lab regression run commit-helper \</div><div class="pc-ln pc-ln--pad">--baseline v1 --candidate v2-bad</div><div class="pc-ln"><i>&#8250;</i> 12 runs &middot; evaluating&hellip;</div><div class="pc-ln pc-ln--dim">verdict: <b>regressed</b></div></div></figure>
+          </li>
+          <li class="mo-pc__step">
+            <h3>Read the diff</h3>
+            <p>Each task gets a verdict and a category, with the runs and checks behind it.</p>
+            <figure class="mo-pc__visual mo-pc__visual--lit"><div class="pc-report pc-report--card ui"><div class="pc-row pc-row--head"><span>write-commit-msg</span><span>v1</span><span>v2</span><span>&Delta;</span></div><div class="pc-row"><span>activated</span><b>100%</b><b>0%</b><em class="is-bad">-1.00</em></div><div class="pc-row"><span>success</span><b>100%</b><b>100%</b><em>+0.00</em></div></div></figure>
+          </li>
+        </ol>
+      </div>
+      <div class="mo-pc__visuals frame"></div>
+    </div>
+  </section>
+
+  <section class="section" id="pipeline" aria-labelledby="pipeline-h">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 id="pipeline-h">The regression pipeline, wired once. <span class="muted">Two arms, one config.</span></h2>
+      </div>
+      <div class="panel panel--diagram">
+        <div class="dg" data-dg-still data-diagram="lanes-agent" data-diagram-opts='{"alt":"The task bank feeds the engine, which produces sandboxed rollouts, three evaluators and the regression report.","input":{"label":"Task bank","icon":"ui:list-checks","sub":"suites/default.yaml"},"core":{"label":"Engine","icon":"ui:cpu"},"lanes":[{"label":"Sandboxed rollouts","icon":"ui:box","done":true,"sub":"bwrap, no network"},{"label":"Three evaluators","icon":"ui:flask-conical","done":true,"sub":"checks, judge, human"},{"label":"Regression report","icon":"ui:file-check","done":true,"sub":"regressions/<id>/"}]}'></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section ground-inverse g2m" id="eval" aria-labelledby="eval-h">
+    <div class="wrap grid grid--top">
+      <div class="span-5">
+        <div class="section-head">
+          <h2 id="eval-h">Four states an eval can hold</h2>
+          <p>Pending, passed, failed or error. An error means the evaluator broke, never that the task failed, and a pending criterion never counts as a pass.</p>
+        </div>
+        <p class="t-small muted">Rubric weights and scales are validated before the first rollout. Judge output records the judge model; human scores land per criterion.</p>
+        <div class="panel eval-yaml ui">
+          <span class="muted"><svg class="i-dots" viewBox="0 0 30 8" aria-hidden="true"><circle cx="4" cy="4" r="3"/><circle cx="15" cy="4" r="3"/><circle cx="26" cy="4" r="3"/></svg> eval.yaml &middot; reg&hellip;--candidate--write-commit-msg--r1</span><br>
+          criteria:<br>
+          &nbsp;&nbsp;- name: file-exists &nbsp;&nbsp;&nbsp;<b class="st st--pass">passed</b><br>
+          &nbsp;&nbsp;- name: json-check &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<b class="st st--pass">passed</b><br>
+          &nbsp;&nbsp;- name: judge-quality &nbsp;<b class="st st--pass">passed</b>&nbsp;&nbsp;<span class="muted">score 0.92</span><br>
+          &nbsp;&nbsp;- name: human-review &nbsp;<b class="st st--pend">pending</b><br>
+          status: <b class="st st--pend">pending</b>&nbsp;&nbsp;<span class="muted">never passed while pending</span><br>
+model: <b>mock</b>&nbsp;&nbsp;<span class="muted">simulated, not real-model output</span><br>
+judge_model: mock-judge &nbsp;&nbsp;evaluated_at: 2026-05-14T09:41Z
+        </div>
+      </div>
+      <div class="span-6 start-7">
+        <div class="ui ui-panel eval-card"><svg class="eval-card__ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="1" width="14" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4.5 8.2l2.4 2.4 4.6-5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><ul class="rows rows--eval ui">
+          <li><span class="rows__name"><b class="st st--pend">pending</b><small>Mandatory criterion not yet scored</small></span><span class="rows__value">blocks pass</span></li>
+          <li><span class="rows__name"><b class="st st--pass">passed</b><small>Every criterion checked, thresholds met</small></span><span class="rows__value">final</span></li>
+          <li><span class="rows__name"><b class="st st--fail">failed</b><small>A deterministic check or rubric score missed</small></span><span class="rows__value">final</span></li>
+          <li><span class="rows__name"><b class="st st--err">error</b><small>Judge unreachable, check crashed; not a task failure</small></span><span class="rows__value">flagged</span></li>
+        </ul></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section g2m" id="faq" aria-labelledby="faq-h">
+    <div class="wrap grid grid--top">
+      <div class="span-5">
+        <div class="section-head">
+          <h2 id="faq-h">Questions</h2>
+          <p class="muted">Asked before the first benchmark. More in the <a class="link" href="https://github.com/kien2803/SkillLab/blob/main/SPEC.md">spec</a>.</p>
+        </div>
+        <div class="panel faq-config ui"><span class="muted">lab.yaml</span><span class="cfg-more"><br>
+sandbox: bwrap<br>
+model: mock<br>
+command_timeout: 60<br>
+llm_timeout: 120<br>
+llm_retries: 3</span><br>
+regression:<br>
+&nbsp;&nbsp;min_runs: 3<br>
+&nbsp;&nbsp;score_drop: 0.10<br>
+&nbsp;&nbsp;token_increase: 0.25<br>
+&nbsp;&nbsp;latency_increase: 0.25<br>
+&nbsp;&nbsp;variance_increase: 0.10<span class="cfg-more"><br>
+graduation:<br>
+&nbsp;&nbsp;activation: 0.80<br>
+&nbsp;&nbsp;false_activation: 0.20<br>
+&nbsp;&nbsp;min_tasks: 3</span></div>
+      </div>
+      <div class="span-6 start-7">
+        <div class="ui ui-panel faq-panel"><div class="faq">
+          <div class="faq__item"><h3>Does it call real models?</h3><p>Yes, through LiteLLM with your provider keys. The demo and tests run on a deterministic mock, and reports label mock output as simulated.</p></div>
+          <div class="faq__item"><h3>What does a run need?</h3><p>Python 3.10 or later, a lab directory and task fixtures. Command tools run inside bwrap; without it they stay disabled rather than running open.</p></div>
+          <div class="faq__item"><h3>What counts as a regression?</h3><p>A task that stops passing, a score drop, lost or false activation, or growth in tokens, latency or variance. Every threshold lives in lab.yaml.</p></div>
+          <div class="faq__item"><h3>Can I compare models too?</h3><p>Yes. lab rerun --model runs the same experiment on another model, and the report groups every metric by model.</p></div>
+          <div class="faq__item"><h3>Where do run files live?</h3><p>Plain files in the lab: run.yaml, eval.yaml, transcripts and regressions/&lt;id&gt;/. Nothing leaves the repository.</p></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer closing footer--dark ground-inverse" aria-labelledby="close-h">
+  <div class="wrap">
+    <div class="closing__cta close--type">
+      <div class="section-head"><h2 id="close-h">Change it, then measure it.</h2><p class="t-small muted">Free, open source, runs offline on mock. Three commands to a first verdict.</p></div>
+      <a class="btn btn--primary btn--xl btn--wide" href="https://github.com/kien2803/SkillLab">Try the quickstart<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a>
+    </div>
+    <div class="closing__links">
+      <div class="grid">
+        <div class="span-4 stack-5">
+          <a class="nav__logo" href="#top">SkillLab</a>
+          <p class="footer__lede">Regression testing for agent skills.</p>
+        </div>
+        <div class="span-2 footer__col"><h4>Product</h4><ul><li><a href="#report">Report</a></li><li><a href="#measured">Measured</a></li><li><a href="#loop">Loop</a></li></ul></div>
+        <div class="span-3 footer__col"><h4>Internals</h4><ul><li><a href="#pipeline">Pipeline</a></li><li><a href="#eval">Eval states</a></li><li><a href="#faq">FAQ</a></li></ul></div>
+        <div class="span-3 footer__col"><h4>Project</h4><ul><li><a href="https://github.com/kien2803/SkillLab">GitHub</a></li><li><a href="https://github.com/kien2803/SkillLab/blob/main/SPEC.md">Spec</a></li></ul></div>
+      </div>
+      <div class="footer__legal">
+        <span>&copy; 2026 SkillLab</span>
+        <span class="credits">Interface fragments: taste-skill UI kit. Type: Familjen Grotesk and IBM Plex Mono.</span>
+      </div>
+    </div>
+  </div>
+</footer>
+<script type="module" src="assets/system.js"></script>
+<script type="module" src="assets/motion/motion.js"></script>
+<script type="module" src="assets/layout/layout.js"></script>
+<script type="module">import dg from './assets/diagrams/diagram.js'; dg.auto(document);</script>
+</body>
+</html>

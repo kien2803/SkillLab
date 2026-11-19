@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from pathlib import Path
 
 import yaml
 
 from .lab import Lab, LabError
-from .models import parse_frontmatter
+from .models import load_yaml, parse_frontmatter
 
 TEMPLATE = """---
 id: {iid}
@@ -81,18 +82,78 @@ def _set_status(lab: Lab, insight_id: str, status: str) -> Path:
     raise LabError(f"Insight '{insight_id}' not found.")
 
 
+def confirm(lab: Lab, insight_id: str) -> Path:
+    """Mark an insight confirmed — requires at least one valid evidence ref."""
+    for d in (lab.insights_dir, lab.principles_dir):
+        p = d / f"{insight_id}.md"
+        if p.is_file():
+            fm, _ = parse_frontmatter(p.read_text())
+            ev = fm.get("evidence") or []
+            if isinstance(ev, str):
+                ev = [ev]
+            if not _evidence_experiments(lab, ev):
+                raise LabError(f"insight '{insight_id}' has no valid "
+                               "experiment/run evidence to confirm")
+            return _set_status(lab, insight_id, "confirmed")
+    raise LabError(f"Insight '{insight_id}' not found.")
+
+
 def refute(lab: Lab, insight_id: str) -> Path:
     """Mark an insight refuted — refuted insights are kept, not deleted."""
     return _set_status(lab, insight_id, "refuted")
 
 
+def _evidence_experiments(lab: Lab, evidence: list) -> set[str]:
+    """Distinct experiment ids referenced by the evidence list.
+
+    Run ids resolve to their parent experiment — repeats of the same
+    experiment never count as independent evidence.
+    """
+    exps = set()
+    for ref in evidence:
+        ref = str(ref)
+        if (lab.experiments_dir / ref / "experiment.yaml").is_file():
+            exps.add(ref)
+        else:
+            ry = lab.runs_dir / ref / "run.yaml"
+            if ry.is_file():
+                exp = load_yaml(ry).get("experiment")
+                if exp:
+                    exps.add(str(exp))
+    return exps
+
+
 def promote(lab: Lab, insight_id: str) -> Path:
+    """Promote an insight to a principle — gated on evidence.
+
+    Requires: >=2 independent experiments as evidence, non-empty scope,
+    and a completed writeup (no TODO placeholders). Existing principles
+    are never overwritten.
+    """
     src = lab.insights_dir / f"{insight_id}.md"
     if not src.is_file():
         raise LabError(f"Insight '{insight_id}' not found.")
     fm, body = parse_frontmatter(src.read_text())
-    fm["status"] = "promoted"
+    ev = fm.get("evidence") or []
+    if isinstance(ev, str):
+        ev = [ev]
+    exps = _evidence_experiments(lab, ev)
+    if len(exps) < 2:
+        raise LabError(
+            f"promotion requires evidence from >=2 independent experiments "
+            f"(found {len(exps)}: {', '.join(sorted(exps)) or 'none'})")
+    if not fm.get("scope"):
+        raise LabError("insight needs a non-empty 'scope' before promotion "
+                       "— where does this finding apply?")
+    if "TODO" in body:
+        raise LabError("insight still contains TODO placeholders — finish "
+                       "the statement/conditions/counter-evidence sections")
     dest = lab.principles_dir / src.name
+    if dest.exists():
+        raise LabError(f"principle '{dest.stem}' already exists — refusing "
+                       "to overwrite")
+    fm["status"] = "promoted"
+    fm["promoted_at"] = date.today().isoformat()
     dest.write_text("---\n" + yaml.safe_dump(fm, sort_keys=False,
                                              allow_unicode=True) + "---\n" + body)
     src.unlink()

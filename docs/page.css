@@ -1,0 +1,336 @@
+/* page css — only what sits inside a visual and the kit lacks */
+.ly-collage { container-type: inline-size; }
+.ly-collage .ly-piece { box-shadow: 0 1px 2px rgb(11 12 14 / .08), 0 22px 48px -22px rgb(11 12 14 / .3); }
+
+/* collage pieces: sized in %, text in cqw so the phone shows the same picture smaller */
+.ly-piece.pc-report, .ly-piece.pc-term, .ly-piece.pc-cmd, .ly-piece.pc-tasks,
+.ly-piece.pc-eval, .ly-piece.pc-skill, .ly-piece.pc-verdict, .ly-piece.pc-insight {
+  background: #fff; color: var(--p-ink);
+}
+.pc-report { padding: 4.5cqw 5cqw; display: grid; gap: 1.6cqw; font: 400 max(12px, 1.9cqw)/1.3 var(--font-mono); }
+.pc-row { display: grid; grid-template-columns: 1.4fr 1fr 1fr .8fr; gap: 1cqw; padding-top: 1.6cqw; border-top: 1px solid rgb(11 12 14 / .1); align-items: baseline; }
+.pc-row:first-child { border-top: 0; padding-top: 0; }
+.pc-row--head { color: var(--p-muted); font-size: max(11px, 1.6cqw); }
+.pc-row em { font-style: normal; text-align: right; color: var(--p-muted); }
+.pc-row em.is-bad { color: var(--c-regress); font-weight: 500; }
+.pc-verdict { padding: 4cqw; display: grid; gap: 1.4cqw; align-content: start; }
+.pc-chip { display: inline-flex; align-items: center; width: fit-content; padding: .6cqw 1.6cqw; border-radius: 99px; font: 500 max(12px, 2cqw)/1.2 var(--font-text); }
+.pc-chip--bad { background: rgb(194 52 52 / .12); color: var(--c-regress); }
+.pc-sub { font: 400 max(12px, 1.9cqw)/1.3 var(--font-text); color: var(--p-muted); }
+.pc-mono { font: 400 max(11px, 1.6cqw)/1.3 var(--font-mono); color: var(--p-muted); overflow-wrap: anywhere; }
+.pc-term, .pc-cmd { padding: 4cqw 4.5cqw; display: grid; gap: 1.4cqw; font: 400 max(12px, 1.8cqw)/1.35 var(--font-mono); align-content: start; }
+.pc-ln i { font-style: normal; color: var(--p-accent); margin-right: 1cqw; }
+.pc-ln--dim { color: var(--p-muted); } .pc-ln--dim b { color: var(--c-regress); }
+.pc-ln--pad { padding-left: 3cqw; }
+.pc-tasks { padding: 4cqw; display: grid; gap: 1.4cqw; font: 400 max(12px, 1.9cqw)/1.3 var(--font-text); align-content: start; }
+.pc-task { display: flex; justify-content: space-between; gap: 2cqw; padding-top: 1.4cqw; border-top: 1px solid rgb(11 12 14 / .1); }
+.pc-task:first-child { border-top: 0; padding-top: 0; }
+.pc-task b { font-weight: 500; color: var(--p-muted); white-space: nowrap; }
+.pc-task b.is-bad { color: var(--c-regress); } .pc-task b.is-good { color: var(--c-pass); }
+.pc-eval { padding: 4cqw; display: grid; gap: 1.6cqw; font: 400 max(12px, 1.8cqw)/1.3 var(--font-text); align-content: start; }
+.pc-chk { display: flex; align-items: center; gap: 1.6cqw; }
+.pc-chk i { width: 1.8cqw; height: 1.8cqw; min-width: 10px; min-height: 10px; border-radius: 50%; }
+.pc-chk.is-pass i { background: var(--c-pass); } .pc-chk.is-pend i { border: .4cqw solid var(--c-warn); background: none; box-sizing: border-box; }
+.pc-chk span { flex: 1; font-family: var(--font-mono); } .pc-chk b { font-weight: 500; color: var(--p-muted); }
+.pc-chk.is-pass b { color: var(--c-pass); } .pc-chk.is-pend b { color: var(--c-warn); }
+.pc-skill { padding: 4cqw; display: grid; gap: 1.6cqw; align-content: start; }
+.pc-lbl { font: 400 max(11px, 1.6cqw)/1.3 var(--font-mono); color: var(--p-muted); }
+.pc-code { font: 400 max(12px, 1.8cqw)/1.5 var(--font-mono); }
+.pc-code .is-del { color: var(--c-regress); background: rgb(194 52 52 / .08); }
+.pc-insight { padding: 4cqw; display: grid; gap: 1.2cqw; align-content: start; font: 400 max(13px, 2cqw)/1.35 var(--font-text); }
+.pc-insight b { font-weight: 500; }
+@media (max-width: 639px) { .pc-report .pc-row:nth-of-type(n+5), .pc-eval .pc-chk:nth-of-type(n+4) { display: none; } }
+
+/* card visuals inside the pinned-chapters moment and elsewhere: same pieces, plain css units */
+.pc-skill--card, .pc-term--card, .pc-report--card { background: #fff; height: 100%; display: grid; align-content: center; }
+.pc-skill--card { padding: 28px; gap: 12px; } .pc-skill--card .pc-lbl { font-size: 13px; } .pc-skill--card .pc-code { font-size: 15px; }
+.pc-term--card { padding: 28px; gap: 10px; } .pc-term--card .pc-ln { font-size: 14px; }
+.pc-report--card { padding: 28px; gap: 10px; font: 400 14px/1.3 var(--font-mono); }
+.pc-report--card .pc-row { padding-top: 10px; } .pc-report--card .pc-row--head { font-size: 12px; }
+.mo-pc__visual { margin: 0; border-radius: var(--r-md); overflow: hidden; }
+
+/* app-frame (sections-library.md): the report window, list beside open task */
+.app.ui { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); margin-top: var(--s-7); background: var(--u-bg); border: 1px solid var(--u-border); border-radius: var(--u-r); box-shadow: var(--u-shadow); height: 550px; }
+.app > .app__pane { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.app > .app__pane + .app__pane { border-left: 1px solid var(--u-line); }
+.app > .app__pane > .ui-panel { width: 100%; border: 0; border-radius: 0; box-shadow: none; }
+.app > .app__pane::after { content: ""; position: absolute; inset: auto 0 0 0; height: 64px; background: linear-gradient(transparent, var(--u-bg)); pointer-events: none; }
+@media (min-width: 1024px) and (max-width: 1279px) { .app.ui { grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); } }
+@media (max-width: 1023px) {
+  .app.ui { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: 640px; }
+  .app > .app__pane--list { max-height: 252px; }
+  .app > .app__pane--list::after { display: none; }
+  .app .ui-win__side { display: none; }
+  .app .ui-win__body { grid-template-columns: minmax(0, 1fr); }
+  .app > .app__pane + .app__pane { border-left: 0; border-top: 1px solid var(--u-line); }
+}
+@media (max-width: 639px) {
+  .app.ui { grid-template-rows: minmax(0, 1fr); height: 560px; }
+  .app > .app__pane--list { display: none; }
+  .app > .app__pane + .app__pane { border-top: 0; }
+}
+
+/* the open task pane: a metrics diff in the kit's own language */
+.reg-open { height: 100%; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.reg-open__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--u-line); }
+.reg-open__crumb { font: 500 15px/1.3 var(--font-mono); }
+.reg-open__crumb .muted { font-weight: 400; font-size: 13px; margin-left: 8px; }
+.reg-open__head .pc-chip { font-size: 13px; padding: 4px 12px; }
+.reg-open__grid { display: grid; grid-template-columns: 1.3fr 1fr 1fr .9fr; font: 400 14px/1.2 var(--font-mono); }
+.reg-open__c { padding: 9px 20px; border-bottom: 1px solid var(--u-line); }
+.reg-open__c--h { color: var(--u-muted); font-size: 12px; }
+.reg-open__c.is-bad { color: var(--c-regress); font-weight: 500; background: rgb(194 52 52 / .05); }
+.reg-open__ev { padding: 14px 20px; display: grid; gap: 8px; font-size: 13px; }
+.reg-open__evln { display: grid; grid-template-columns: 120px 1fr; gap: 12px; }
+.reg-open__evln b { font-weight: 500; color: var(--u-muted); font-size: 12px; }
+.reg-open__evln .mono { font-family: var(--font-mono); font-size: 12px; }
+.reg-open__evln--mock { color: var(--c-warn); }
+@media (max-width: 639px) { .reg-open__evln { grid-template-columns: 1fr; gap: 2px; } }
+
+/* card panels and the diagram */
+#measured .panel { --p-h: 150px; overflow: clip; }
+@media (min-width: 640px) and (max-width: 1023px) { #measured .panel { --p-h: 250px; } }
+#measured .section-head { margin-bottom: var(--s-4); }
+#measured .ui-file:nth-of-type(n+3) { display: none; }
+@media (max-width: 1023px) {
+  #measured .fit { --ax: 24px; }
+  #measured .ui-stat__range { display: none; }
+  #measured .ui-note__title time { display: none; }
+}
+@media (max-width: 639px) { #measured .panel { --p-h: 218px; } #measured .stage { --fade-h: 36px; } }
+@media (max-width: 1023px) { #measured .at-corner, #measured .to-edge, #measured .fit { --ax: 20px; } }
+#pipeline .panel--diagram { --p-h: 480px; display: grid; }
+#pipeline .dg { min-height: 480px; }
+@media (max-width: 639px) { #pipeline .dg, #pipeline .panel--diagram { min-height: 380px; --p-h: 380px; } }
+
+/* the eval band: the yaml fragment under the text, taller state rows */
+.eval-yaml { margin-top: var(--s-6); padding: 20px 24px; font: 400 13px/1.75 var(--font-mono); }
+.eval-yaml .muted { color: var(--p-inv-muted); }
+.eval-yaml .st { margin-right: 8px; }
+.rows--eval li { padding-block: 18px; }
+.rows--eval .st { display: inline-block; min-width: 78px; font: 500 13px/1 var(--font-mono); padding: 5px 10px; border-radius: 99px; margin-right: 12px; }
+.st--pend { color: var(--c-warn); border: 1px solid currentcolor; }
+.st--pass { color: var(--c-pass); border: 1px solid currentcolor; }
+.st--fail { color: var(--c-regress); border: 1px solid currentcolor; }
+.st--err { color: #6b6e73; border: 1px solid currentcolor; }
+/* the states card is a .ui-panel: dark on the inverse band, so its ink and chips go light */
+.eval-card { padding: 8px 20px;
+  --u-bg: #141519; --u-surface: #1c1e23; --u-ink: #eceef1; --u-muted: #a9adb6;
+  --u-line: #2b2e35; --u-border: #2b2e35; --u-line-2: #2b2e35;
+  background: var(--u-bg); color: var(--u-ink); }
+.eval-card .rows--eval { margin: 0; }
+.eval-card .rows__name small { color: #b3b5ba; }
+.eval-card .rows__value { color: #b3b5ba; }
+.eval-card .st--pend { color: #f2c568; }
+.eval-card .st--pass { color: #7bdba6; }
+.eval-card .st--fail { color: #ff9d9d; }
+.eval-card .st--err { color: #d6d9de; }
+.eval-card .rows__name { color: #eceef1; }
+/* the yaml panel is a .panel: it stays light on the inverse band, so it needs literal dark ink
+   (--p-ink is the inverse's light ink inside ground-inverse). A solid ground: the software page's
+   mesh gradient under it is what the contrast check reads as a busy effect */
+.eval-yaml { background: #eef1f5 !important; background-image: none !important; }
+.eval-yaml { color: #1a1c1f; }
+.eval-yaml .muted { color: #3f454e; }
+.eval-yaml b:not(.st) { color: #1a1c1f; }
+.ui-note__body { color: #4d5157; }
+.ui-note__meta, .ui-note__title .muted { color: #5b5f66; }
+
+/* -- consistency pass -- */
+@media (max-width: 1023px) {
+  .hero--triptych .ly-collage { order: 3; }
+  .hero--triptych .hero__cta { order: 2; margin-top: var(--s-6); }
+}
+@media (max-width: 1023px) {
+  .ly-collage .pc-report { width: 50% !important; }
+  .ly-collage .pc-term { width: 50% !important; }
+}
+@media (max-width: 639px) {
+  .hero .ly-collage { min-height: 340px; }
+  /* collage pieces stay under half the container wide on a short hero visual */
+  .ly-collage .pc-skill { display: none; }
+  .ly-collage .pc-report { left: 50% !important; top: 4% !important; width: 48% !important; font-size: 11px; }
+  .ly-collage .pc-report .pc-row--head span:first-child { display: none; }
+  .ly-collage .pc-verdict { left: 2% !important; top: 4% !important; width: 44% !important; }
+  .ly-collage .pc-term { left: 2% !important; top: 52% !important; width: 48% !important; }
+  .ly-collage .pc-eval { left: 52% !important; top: 58% !important; width: 46% !important; }
+}
+.ui-note__title time { color: var(--u-muted); }
+.app .ui-win { width: 100%; }
+.app .ui-win__who { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
+@media (max-width: 639px) {
+  .reg-open__grid { font-size: 11px; }
+  .reg-open__c { padding: 8px 10px; }
+  .reg-open__head { padding: 12px; }
+  .reg-open__ev { padding: 12px; }
+  #measured { --h: 2; }
+}
+/* still ground for the moment frame when its shader is off (gl-fallback):
+   two offset glows over a fine grid, so the frame never reads as one flat colour */
+.mo-pc__visuals.frame {
+  background:
+    radial-gradient(75% 60% at 82% 14%, color-mix(in oklab, var(--p-accent) 38%, var(--p-surface)) 0%, transparent 70%),
+    radial-gradient(60% 55% at 12% 88%, color-mix(in oklab, var(--p-accent) 22%, var(--p-surface)) 0%, transparent 72%),
+    repeating-linear-gradient(0deg, transparent 0 35px, color-mix(in oklab, var(--p-ink) 9%, transparent) 35px 36px),
+    repeating-linear-gradient(90deg, transparent 0 35px, color-mix(in oklab, var(--p-ink) 9%, transparent) 35px 36px),
+    var(--p-surface) !important;
+}
+/* a still diagram paints its final state at once: no colour transition when it scrolls in */
+.dg[data-dg-still] .dg-node, .dg.is-still .dg-node, .dg[data-dg-still] .dg-cap, .dg.is-still .dg-cap { transition: none !important; }
+/* muted text on the inverse band stays readable */
+.ground-inverse .t-small.muted { color: #b3b5ba; }
+/* faq config block: a real lab.yaml excerpt as the section's second object */
+.faq-config { margin-top: var(--s-6); padding: 20px 24px; font: 400 14px/1.8 var(--font-mono); color: var(--p-ink); white-space: pre; overflow-x: auto;
+  background: #eef1f5 !important;
+  background-image: linear-gradient(180deg, #e5e8ee 0 34px, #eef1f5 34px) !important;
+  padding-top: 48px; }
+.faq-config > .muted:first-child { position: absolute; top: 0; left: 24px; height: 34px; display: flex; align-items: center; }
+.faq-config { position: relative; }
+.faq-config .muted { color: #3f454e; }
+@media (max-width: 639px) {
+  .faq-config { font-size: 12.5px; line-height: 1.6; padding: 16px 18px; }
+}
+
+/* #faq: the right column runs to the section's foot on the one-screen layout (a phone stacks; a
+   tablet stacks the columns at their natural height, which already fills the screen) */
+@media (min-width: 1024px) {
+  #faq .wrap.grid { grid-template-rows: minmax(0, 1fr); }
+  #faq .grid--top { align-items: stretch; }
+  #faq .span-6 { display: flex; flex-direction: column; height: 100%; }
+  #faq .faq-panel { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; }
+  #faq .faq { flex: 1 1 0; display: flex; flex-direction: column; justify-content: space-between; min-height: 0; }
+}
+@media (min-width: 640px) and (max-width: 1023px) {
+  .footer .footer__col { grid-column: auto / span 4; }
+}
+/* the short lab.yaml excerpt: the section's columns stretch to fill instead */
+.cfg-more { display: none; }
+@media (min-width: 1024px) {
+  .faq__item { padding-block: 12px; }
+  .faq__item p { font-size: 14px; line-height: 1.45; }
+  .faq__item:last-child { padding-bottom: 0; }
+}
+/* footer on a phone fits one screen */
+@media (max-width: 639px) {
+  footer.closing { --padt: var(--s-5); }
+  .closing__cta { margin-bottom: var(--s-4); }
+  .footer__lede { display: none; }
+  .footer__col h4 { margin-bottom: var(--s-2); }
+  .footer__legal .credits { display: none; }
+}
+/* diagram labels on the drawn ground */
+#pipeline .dg { --dg-muted: #4d5157; }
+/* #eval: the states card runs to the section's foot like the faq column */
+@media (min-width: 1024px) {
+  #eval .span-6 { display: flex; flex-direction: column; height: 100%; }
+  #eval .eval-card { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; overflow: clip; }
+  #eval .rows--eval { flex: 1 1 0; display: flex; flex-direction: column; justify-content: space-evenly; min-height: 0; }
+}
+.eval-yaml .i-dots { width: 30px; height: 8px; vertical-align: -1px; fill: #9aa1ab; }
+.eval-card { position: relative; }
+.eval-card__ic { position: absolute; top: 14px; right: 14px; width: 16px; height: 16px; color: #6fb1ff; }
+#eval .rows--eval li { padding-block: 10px; }
+@media (max-width: 1023px) {
+  #eval .rows--eval li { padding-block: 7px; }
+  #eval .span-6 { display: flex; flex-direction: column; }
+  #eval .eval-card { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; }
+  #eval .rows--eval { flex: 1; display: flex; flex-direction: column; justify-content: space-evenly; }
+}
+@media (min-width: 640px) and (max-width: 1023px) {
+  #eval .wrap.grid { grid-template-rows: auto minmax(0, 1fr); }
+  #eval .span-6 { height: 100%; }
+}
+@media (min-width: 1024px) {
+  #eval .wrap.grid { grid-template-rows: minmax(0, 1fr); }
+  #eval .grid--top { align-items: stretch; }
+}
+/* a tablet's one-screen faq: compact items so the column closes inside the screen */
+@media (min-width: 640px) and (max-width: 1023px) {
+  .faq__item { padding-block: 10px; }
+  .faq__item h3 { font-size: 15px; }
+  .faq__item p { font-size: 13.5px; line-height: 1.4; }
+  #faq .faq-config { font-size: 12.5px; line-height: 1.6; padding: 14px 16px; }
+}
+
+/* #loop at rest (no pin under 1024px): two screens tall, its steps spread through it */
+@media (max-width: 1023px) {
+  #loop { min-height: calc(2 * 100svh); }
+  #loop .wrap.mo-pc__grid { height: 100%; grid-template-rows: minmax(0, 1fr); align-content: stretch; }
+  #loop .mo-pc__text { height: 100%; grid-template-rows: auto minmax(0, 1fr); }
+  #loop .mo-pc__steps { height: 100%; align-content: space-between; }
+}
+/* the lit visual keeps an effect margin around the card, so the shader's ground reads */
+@media (min-width: 1024px) {
+  [data-moment] .mo-pc__visual--lit > .ui { max-width: 88%; max-height: 86%; }
+  [data-moment="pinned-chapters"] .mo-pc__visual.mo-pc__visual--lit {
+    background:
+      radial-gradient(75% 60% at 82% 14%, color-mix(in oklab, var(--p-accent) 38%, var(--p-surface)) 0%, transparent 70%),
+      radial-gradient(60% 55% at 12% 88%, color-mix(in oklab, var(--p-accent) 22%, var(--p-surface)) 0%, transparent 72%),
+      repeating-linear-gradient(0deg, transparent 0 35px, color-mix(in oklab, var(--p-ink) 9%, transparent) 35px 36px),
+      repeating-linear-gradient(90deg, transparent 0 35px, color-mix(in oklab, var(--p-ink) 9%, transparent) 35px 36px),
+      var(--p-surface);
+  }
+}
+@media (max-width: 1023px) {
+  [data-moment] .mo-pc__visual--lit { display: block; padding: 0; background: none; aspect-ratio: auto; }
+  [data-moment] .mo-pc__visual--lit > .ui { max-width: 100%; }
+}
+
+.reg-open__evln b { color: #4d5157; }
+.reg-open__evln--mock { color: #58400a; }
+@media (max-width: 1023px) {
+  #measured .ui-stat { width: 100%; min-width: 0; }
+  #measured .ui-stat__num { font-size: 26px; }
+  #measured .ui-stat__sub { display: none; }
+  #measured .ui-stat__label { font-size: 12px; }
+  #measured .ui-stat__head, #measured .ui-stat__top, #measured .ui-stat__line { min-width: 0; }
+  #measured .ui-files { width: 100%; min-width: 0; }
+  #measured .ui-file { min-width: 0; }
+  #measured .ui-file__name, #measured .ui-file__meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #measured .ui-notify { width: 100%; min-width: 0; }
+  #measured .ui-note, #measured .ui-note__text, #measured .ui-note__title { min-width: 0; }
+  #measured .ui-note__body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #measured .ui-note__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; max-width: 100%; }
+}
+/* diagram labels/pills stay inside the panel on a phone */
+@media (max-width: 639px) { #pipeline .dg { font-size: 11px; } }
+
+/* #measured -> #loop sat ~150px wider than the page's median gap once the moment is live */
+@media (min-width: 1024px) { #measured { --padb: 24px; } }
+
+
+
+/* under the moment's live width the run-loop section carries the gap itself: pull its
+   own padding and #measured's foot in so the pair matches the page's median gap */
+@media (min-width: 640px) and (max-width: 1023px) {
+  #measured { --padb: 24px; }
+  #loop { --padt: 16px; }
+}
+
+@media (max-width: 639px) {
+  #pipeline .dg .dg-cap, #pipeline .dg .dg-cap__l { white-space: normal; }
+  #pipeline .dg .dg-cap__l { max-width: 104px; margin-inline: auto; }
+  /* a tile's caption is wider than the 36px tile: it gets its own chip so the label
+     sits inside a drawn box instead of overhanging the icon */
+  #pipeline .dg[data-tier="c"] .dg-node--tile > .dg-cap {
+    max-width: 80px; font-size: 10.5px; line-height: 13px;
+    background: #fff; border: 1px solid rgba(18,20,26,.28);
+    border-radius: 7px; padding: 3px 7px;
+  }
+}
+
+/* the narrow tablet's one-screen faq: the config block would push it past the screen,
+   so the question list becomes a quiet ui-panel card (its inner text is a mock's, so
+   the card's own padding does not fight the column edge) */
+/* outside the narrow tablet the wrapper is chromeless: a plain block, no fill or
+   border, so the question list reads as bare section text */
+.faq-panel { background: none; border: 0; box-shadow: none; padding: 0; }
+@media (min-width: 640px) and (max-width: 799px) {
+  #faq .faq-config { display: none; }
+  #faq .wrap.grid { grid-template-rows: auto minmax(0, 1fr); }
+  #faq .span-6 { display: flex; flex-direction: column; }
+  #faq .faq-panel.ui-panel { display: flex; flex-direction: column; flex: 1 1 0; margin-top: var(--s-6);
+    background: var(--u-bg); border: 1px solid var(--u-border); border-radius: var(--u-r); box-shadow: var(--u-shadow); }
+  #faq .faq-panel .faq { flex: 1 1 0; display: flex; flex-direction: column; justify-content: space-between; }
+  #faq .faq-panel .faq__item { padding-block: 10px; padding-inline: 20px; }
+}

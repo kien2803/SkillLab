@@ -1,0 +1,33 @@
+run_id: reg-commit-helper-v1-v2-bad-01--baseline--write-commit-msg--r1
+experiment: reg-commit-helper-v1-v2-bad-01
+arm: baseline
+task: write-commit-msg
+model:
+  name: mock
+  temperature: 0.0
+seed: 471347039
+injection_mode: available
+skill_ref: commit-helper@v1
+skill_hash: sha256:971c5f8dc58349e9
+status: ok
+error: null
+started: '2026-11-18T14:06:28.789145+00:00'
+finished: '2026-11-18T14:06:28.790939+00:00'
+usage:
+  input_tokens: 202
+  output_tokens: 9
+  turns: 4
+skill_events:
+- t: 0
+  event: offered
+  skill: commit-helper
+  path: null
+- t: 1
+  event: activated
+  skill: commit-helper
+  path: null
+- t: 2
+  event: resource_read
+  skill: commit-helper
+  path: resources/style.md
+final_message: Done — wrote OUTPUT.md with the result.

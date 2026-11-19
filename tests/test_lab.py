@@ -239,11 +239,40 @@ def test_ui_generation(lab):
     from skilllab.ui import generate
     out = generate(lab)
     index = (out / "index.html").read_text()
-    assert "commit-helper" in index
-    assert "exp-test-trigger" in index
+    assert "exp-test-trigger" in index  # recent runs link to the experiment
+    skills = (out / "skills.html").read_text()
+    assert "commit-helper" in skills
+    assert (out / "benchmarks.html").is_file()
+    assert (out / "regressions.html").is_file()
+    assert (out / "experiments.html").is_file()
+    assert "exp-test-trigger" in (out / "experiments.html").read_text()
     assert (out / "skill-commit-helper.html").is_file()
     run_page = next(out.glob("run-*.html"))
-    assert "transcript" in run_page.read_text()
+    assert "ranscript" in run_page.read_text()
+
+
+def test_ui_empty_states(tmp_path, monkeypatch):
+    """A fresh lab renders every page with empty states, not crashes."""
+    lab = Lab.init(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    from skilllab.ui import generate
+    out = generate(lab)
+    for page in ("index", "skills", "benchmarks", "regressions",
+                 "experiments", "insights"):
+        text = (out / f"{page}.html").read_text()
+        assert "empty" in text or "No " in text or "0" in text, page
+    assert 'class="empty"' in (out / "skills.html").read_text()
+
+
+def test_ui_escapes_untrusted_content(lab):
+    """Insight text is HTML-escaped, never injected as markup."""
+    (lab.insights_dir / "xss.md").write_text(
+        "---\nid: xss\nstatus: candidate\n---\n<script>alert(1)</script>\n")
+    from skilllab.ui import generate
+    out = generate(lab)
+    text = (out / "insights.html").read_text()
+    assert "&lt;script&gt;alert" in text
+    assert "<script>alert(1)" not in text
 
 
 def test_diff_runs(lab, capsys):
@@ -446,3 +475,550 @@ def test_skill_scan(lab, capsys, monkeypatch):
     assert "scan-skill" in capsys.readouterr().out
     assert main(["skill", "scan", "--import"]) == 0
     assert (lab.skills_dir / "scan-skill" / "skill.yaml").is_file()
+
+
+# ------------------------------------------------------- Phase 1 hardening --
+
+
+def test_command_disabled_without_sandbox(lab):
+    """Fail closed: unset sandbox means no shell commands, ever."""
+    from skilllab.engine import run_in_workspace, _ToolEnv
+    ws = lab.runs_dir / "ws"
+    ws.mkdir()
+    import pytest as _pt
+    with _pt.raises(Exception, match="disabled"):
+        run_in_workspace(lab, ws, "echo hi")
+    env = _ToolEnv(lab, ws, {})
+    assert "disabled" in env.dispatch("run_command",
+                                      {"command": "echo hi"})
+
+
+def test_command_unsafe_opt_in(lab):
+    from skilllab.engine import run_in_workspace
+    lab.cfg["sandbox"] = "unsafe"
+    ws = lab.runs_dir / "ws"
+    ws.mkdir()
+    r = run_in_workspace(lab, ws, "echo hi")
+    assert r.returncode == 0 and "hi" in r.stdout
+
+
+def test_bwrap_missing_fails_closed(lab, monkeypatch):
+    import shutil as sh
+    from skilllab.engine import run_in_workspace
+    lab.cfg["sandbox"] = "bwrap"
+    monkeypatch.setattr(sh, "which", lambda _: None)
+    ws = lab.runs_dir / "ws"
+    ws.mkdir()
+    with pytest.raises(Exception, match="bwrap"):
+        run_in_workspace(lab, ws, "echo hi")
+
+
+def test_command_timeout(lab):
+    import subprocess
+    from skilllab.engine import run_in_workspace
+    lab.cfg["sandbox"] = "unsafe"
+    lab.cfg["command_timeout"] = 1
+    ws = lab.runs_dir / "ws"
+    ws.mkdir()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_in_workspace(lab, ws, "sleep 5")
+
+
+def test_cmd_driver_respects_sandbox(lab, tmp_path):
+    """A `cmd:` rollout driver must not bypass the execution policy."""
+    import sys
+    from skilllab.engine import run_rollout
+    drv = tmp_path / "drv.py"
+    drv.write_text(
+        "import sys, json\njson.loads(sys.stdin.read())\n"
+        "print(json.dumps({'content': 'done', 'tool_calls': []}))\n")
+    exp = lab.experiment("exp-test-trigger")
+    exp.fixed.model = f"cmd:{sys.executable} {drv}"
+    arm = exp.arms[0]
+    # sandbox unset -> driver call fails closed, run records the error
+    rec = run_rollout(lab, exp, arm, "write-commit-msg", 0)
+    assert rec.status == "error" and "disabled" in (rec.error or "")
+    # explicit unsafe opt-in -> driver executes
+    lab.cfg["sandbox"] = "unsafe"
+    rec2 = run_rollout(lab, exp, arm, "write-commit-msg", 1)
+    assert rec2.status == "ok" and rec2.final_message == "done"
+
+
+def test_engine_append_only_and_archive(lab):
+    """Direct engine calls: existing run dirs are never silently replaced —
+    an explicit overwrite archives the old run instead of deleting it."""
+    from skilllab.engine import run_rollout
+    exp = lab.experiment("exp-test-trigger")
+    rec = run_rollout(lab, exp, exp.arms[0], "write-commit-msg", 0)
+    run_dir = lab.runs_dir / rec.run_id
+    marker = run_dir / "workspace" / "MARKER.txt"
+    marker.write_text("original")
+    with pytest.raises(Exception, match="append-only"):
+        run_rollout(lab, exp, exp.arms[0], "write-commit-msg", 0)
+    assert marker.is_file()  # untouched
+    run_rollout(lab, exp, exp.arms[0], "write-commit-msg", 0, overwrite=True)
+    assert not marker.exists()  # replaced in place...
+    archived = list((lab.archive_dir / rec.run_id).glob("*/workspace/MARKER.txt"))
+    assert archived and archived[0].read_text() == "original"
+
+
+def test_deterministic_check_types(lab):
+    from skilllab.engine import run_rollout
+    lab.cfg["sandbox"] = "unsafe"
+    td = lab.tasks_dir / "checks-task"
+    td.mkdir()
+    (td / "task.yaml").write_text("""\
+id: checks-task
+kind: performance
+prompt: do it
+deterministic_checks:
+  - type: file-content
+    path: OUTPUT.md
+    contains: "commit"
+  - type: json
+    path: out.json
+    keys: [status]
+    field: status.code
+    value: "0"
+  - type: command
+    command: "test -f OUTPUT.md"
+""")
+    exp = lab.experiment("exp-test-trigger")
+    rec = run_rollout(lab, exp, exp.arms[0], "checks-task", 0)
+    ws = lab.runs_dir / rec.run_id / "workspace"
+    (ws / "OUTPUT.md").write_text("a commit message")
+    (ws / "out.json").write_text('{"status": {"code": 0}}')
+    ev = evaluate_run(lab, rec, lab.task("checks-task"),
+                      lab.runs_dir / rec.run_id)
+    assert ev.status == "passed"
+    (ws / "out.json").write_text('{"status": {"code": 1}}')
+    ev = evaluate_run(lab, rec, lab.task("checks-task"),
+                      lab.runs_dir / rec.run_id)
+    assert ev.status == "failed"
+
+
+def test_check_path_traversal_is_error(lab):
+    """A check path escaping the workspace is an eval error, not a pass."""
+    from skilllab.engine import run_rollout
+    td = lab.tasks_dir / "evil-task"
+    td.mkdir()
+    (td / "task.yaml").write_text("""\
+id: evil-task
+kind: performance
+prompt: do it
+deterministic_checks:
+  - type: file-exists
+    path: ../runs/evil-task/../../lab.yaml
+""")
+    exp = lab.experiment("exp-test-trigger")
+    rec = run_rollout(lab, exp, exp.arms[0], "evil-task", 0)
+    ev = evaluate_run(lab, rec, lab.task("evil-task"),
+                      lab.runs_dir / rec.run_id)
+    assert ev.status == "error"
+    assert "escapes" in ev.checks[0].detail
+
+
+def test_judge_error_and_malformed_output(lab):
+    """Judge outages and garbage replies -> error status, never a pass."""
+    lab.cfg["sandbox"] = "unsafe"
+    (lab.rubrics_dir / "judge-rubric.yaml").write_text("""\
+id: judge-rubric
+criteria:
+  - id: quality
+    weight: 1
+    method: llm-judge
+    scale: 1-5
+    judge_prompt: is it good?
+""")
+    td = lab.tasks_dir / "write-commit-msg" / "task.yaml"
+    td.write_text(td.read_text() + "rubric: judge-rubric\n")
+    exp = lab.experiment("exp-test-trigger")
+    from skilllab.engine import run_rollout
+    rec = run_rollout(lab, exp, exp.arms[0], "write-commit-msg", 0)
+    # judge crashes -> error
+    lab.cfg["judge_model"] = "cmd:false"
+    ev = evaluate_run(lab, rec, lab.task("write-commit-msg"),
+                      lab.runs_dir / rec.run_id)
+    assert ev.status == "error" and ev.checks[0].status == "error"
+    # judge replies valid JSON but no SCORE line -> error
+    lab.cfg["judge_model"] = "cmd:echo '{\"content\": \"no score here\"}'"
+    ev = evaluate_run(lab, rec, lab.task("write-commit-msg"),
+                      lab.runs_dir / rec.run_id)
+    assert ev.status == "error" and "SCORE" in ev.checks[0].detail
+    # judge works -> passed, provenance recorded
+    lab.cfg["judge_model"] = \
+        "cmd:echo '{\"content\": \"verdict ok SCORE: 5\"}'"
+    ev = evaluate_run(lab, rec, lab.task("write-commit-msg"),
+                      lab.runs_dir / rec.run_id)
+    assert ev.status == "passed"
+    assert ev.checks[0].judge_model and ev.checks[0].score == 1.0
+    assert ev.evaluated_at
+
+
+def test_human_eval_pending_then_scored(lab):
+    (lab.rubrics_dir / "with-human.yaml").write_text("""\
+id: with-human
+criteria:
+  - id: det
+    weight: 0.5
+    method: deterministic
+    check: OUTPUT.md
+  - id: quality
+    weight: 0.5
+    method: human
+    scale: 1-5
+""")
+    td = lab.tasks_dir / "write-commit-msg" / "task.yaml"
+    td.write_text(td.read_text() + "rubric: with-human\n")
+    from skilllab.engine import run_rollout
+    exp = lab.experiment("exp-test-trigger")
+    rec = run_rollout(lab, exp, exp.arms[0], "write-commit-msg", 0)
+    run_dir = lab.runs_dir / rec.run_id
+    ev = evaluate_run(lab, rec, lab.task("write-commit-msg"), run_dir)
+    # pending human criterion -> eval is pending, NOT passed
+    assert ev.status == "pending" and not ev.success
+    assert main(["eval", rec.run_id, "--score", "quality=4",
+                 "--comment", "quality=looks fine"]) == 0
+    from skilllab.models import EvalResult, load_yaml
+    ev = EvalResult(**load_yaml(run_dir / "eval.yaml"))
+    assert ev.status == "passed"
+    q = [c for c in ev.checks if c.id == "quality"][0]
+    assert "looks fine" in q.detail
+
+
+def test_report_distinguishes_incomplete_evals(lab):
+    (lab.rubrics_dir / "with-human.yaml").write_text("""\
+id: with-human
+criteria:
+  - id: det
+    weight: 0.5
+    method: deterministic
+    check: OUTPUT.md
+  - id: quality
+    weight: 0.5
+    method: human
+    scale: 1-5
+""")
+    td = lab.tasks_dir / "write-commit-msg" / "task.yaml"
+    td.write_text(td.read_text() + "rubric: with-human\n")
+    records = run_experiment(lab, "exp-test-trigger", limit=1)
+    for rec in records:
+        evaluate_run(lab, rec, lab.task(rec.task),
+                     lab.runs_dir / rec.run_id)
+    text = build_report(lab, lab.experiment("exp-test-trigger"))
+    assert "incomplete" in text
+    assert "eval=pending" in text
+
+
+def test_experiment_validate_command(lab, capsys):
+    assert main(["experiment", "validate", "exp-test-trigger"]) == 0
+    assert "is valid" in capsys.readouterr().out
+    bad = lab.experiments_dir / "exp-bad"
+    bad.mkdir()
+    (bad / "experiment.yaml").write_text(EXP_YAML.replace(
+        "exp-test-trigger", "exp bad").replace(
+        "tasks: [write-commit-msg, unrelated-refactor]",
+        "tasks: [write-commit-msg, write-commit-msg]"))
+    assert main(["experiment", "validate", "exp-bad"]) == 1
+    err = capsys.readouterr().err
+    assert "duplicate" in err and "invalid experiment id" in err
+    # invalid experiment must never start a rollout
+    assert main(["run", "exp-bad"]) == 1
+    assert not [d for d in lab.runs_dir.iterdir()
+                if (d / "run.yaml").exists()]
+
+
+def test_validate_rubric_and_fixture_refs(lab):
+    bad = lab.experiments_dir / "exp-bad-rubric"
+    bad.mkdir()
+    td = lab.tasks_dir / "write-commit-msg" / "task.yaml"
+    orig = td.read_text()
+    td.write_text(orig + "rubric: no-such-rubric\n")
+    (bad / "experiment.yaml").write_text(EXP_YAML.replace(
+        "exp-test-trigger", "exp-bad-rubric"))
+    assert main(["experiment", "validate", "exp-bad-rubric"]) == 1
+    td.write_text(orig)
+
+
+def test_import_pack_hardening(lab, tmp_path):
+    """Manifest entries, symlinks, traversal and bad schemas are rejected."""
+    import os
+    from skilllab.models import dump_yaml, load_yaml
+    from skilllab.share import import_pack
+    pack = tmp_path / "evil-pack"
+    (pack / "tasks" / "t1").mkdir(parents=True)
+    (pack / "insights").mkdir(parents=True)
+    (pack / "tasks" / "t1" / "task.yaml").write_text("id: t1\nkind: bogus\n")
+    (pack / "insights" / "ok.md").write_text("hi")
+    # symlink escape attempt
+    os.symlink("/etc/hostname", pack / "insights" / "link.md")
+    dump_yaml({"kind": "skilllab-pack", "version": 1,
+               "contents": ["tasks", "insights"]}, pack / "pack.yaml")
+    res = import_pack(lab, pack)
+    assert res["rejected"]  # bad task.yaml + symlink
+    assert not (lab.insights_dir / "link.md").exists()
+    # unsupported manifest entry -> whole pack refused
+    dump_yaml({"kind": "skilllab-pack", "version": 1,
+               "contents": ["../../etc"]}, pack / "pack.yaml")
+    with pytest.raises(Exception, match="unsupported"):
+        import_pack(lab, pack)
+    # newer pack version -> refused
+    dump_yaml({"kind": "skilllab-pack", "version": 99, "contents": []},
+              pack / "pack.yaml")
+    with pytest.raises(Exception, match="newer"):
+        import_pack(lab, pack)
+
+
+def test_insight_promotion_gating(lab, tmp_path):
+    from skilllab.insights import promote
+    # no evidence -> rejected
+    (lab.insights_dir / "i1.md").write_text("""\
+---
+id: i1
+scope: trigger wording
+---
+Statement. Conditions. Evidence section complete, no placeholders.
+""")
+    with pytest.raises(Exception, match="2 independent"):
+        promote(lab, "i1")
+    # two runs from the SAME experiment are not independent evidence
+    recs = run_experiment(lab, "exp-test-trigger", limit=2)
+    (lab.insights_dir / "i2.md").write_text(f"""\
+---
+id: i2
+evidence: [{recs[0].run_id}, {recs[1].run_id}]
+scope: trigger wording
+---
+Statement. Conditions. Complete.
+""")
+    with pytest.raises(Exception, match="2 independent"):
+        promote(lab, "i2")
+    # second experiment dir -> now promotes
+    (lab.experiments_dir / "exp-two").mkdir()
+    (lab.experiments_dir / "exp-two" / "experiment.yaml").write_text(
+        EXP_YAML.replace("exp-test-trigger", "exp-two"))
+    (lab.insights_dir / "i3.md").write_text(f"""\
+---
+id: i3
+evidence: [exp-test-trigger, exp-two]
+scope: trigger wording
+---
+Statement. Conditions. Complete.
+""")
+    dest = promote(lab, "i3")
+    assert dest.parent == lab.principles_dir
+    assert "promoted_at" in dest.read_text()
+    # existing principle is never overwritten
+    (lab.insights_dir / "i3.md").write_text(dest.read_text().replace(
+        "id: i3", "id: i3"))
+    with pytest.raises(Exception, match="already exists"):
+        promote(lab, "i3")
+    # TODO placeholders block promotion
+    (lab.insights_dir / "i4.md").write_text("""\
+---
+id: i4
+evidence: [exp-test-trigger, exp-two]
+scope: x
+---
+TODO: write the actual statement
+""")
+    with pytest.raises(Exception, match="TODO"):
+        promote(lab, "i4")
+
+
+def test_insight_confirm_requires_evidence(lab):
+    from skilllab.insights import confirm
+    (lab.insights_dir / "c1.md").write_text("---\nid: c1\n---\nbody\n")
+    with pytest.raises(Exception, match="no valid"):
+        confirm(lab, "c1")
+    (lab.insights_dir / "c1.md").write_text(
+        "---\nid: c1\nevidence: [exp-test-trigger]\n---\nbody\n")
+    p = confirm(lab, "c1")
+    assert "confirmed" in p.read_text()
+
+
+def test_legacy_eval_yaml_status_sync():
+    """Old eval.yaml (passed/success only) still maps onto the lifecycle."""
+    from skilllab.models import CheckResult, EvalResult
+    c = CheckResult(id="x", method="deterministic", passed=True)
+    assert c.status == "passed" and c.passed is True
+    c = CheckResult(id="x", method="deterministic", passed=None)
+    assert c.status == "pending" and c.passed is None
+    ev = EvalResult(checks=[], rubric_score=0.9, success=True)
+    assert ev.status == "passed"  # legacy success is trusted
+    ev = EvalResult(checks=[], success=False)
+    assert ev.status == "error"   # no checks and no success -> error
+    ev = EvalResult(checks=[CheckResult(id="x", method="deterministic",
+                                        passed=True)],
+                    success=True)
+    assert ev.status == "passed"
+
+
+# -------------------------------------------------------- regression tests --
+
+VAGUE_SKILL_MD = """\
+---
+name: commit-helper
+description: Helps with stuff and things, quite generic.
+---
+
+# Commit Helper v2
+
+Vague body.
+"""
+
+
+def _add_variant_v2(lab):
+    sd = lab.skills_dir / "commit-helper" / "variants" / "v2"
+    sd.mkdir(parents=True)
+    (sd / "SKILL.md").write_text(VAGUE_SKILL_MD)
+    meta = (lab.skills_dir / "commit-helper" / "skill.yaml").read_text()
+    (lab.skills_dir / "commit-helper" / "skill.yaml").write_text(
+        meta + "  - id: v2\n    path: variants/v2\n")
+
+
+def test_regression_run_detects_activation_regression(lab, capsys):
+    """v2 has a vague description -> mock never activates it -> the
+    regression report must flag an activation regression vs v1."""
+    _add_variant_v2(lab)
+    assert main(["regression", "run", "commit-helper",
+                 "--baseline", "v1", "--candidate", "v2",
+                 "--tasks", "default", "--rollouts", "3"]) == 0
+    reg_dir = lab.d("regressions") / "reg-commit-helper-v1-v2-01"
+    assert (reg_dir / "regression.yaml").is_file()
+    assert (reg_dir / "report.yaml").is_file()
+    report = (reg_dir / "report.md").read_text()
+    assert "REGRESSED" in report
+    assert "activation" in report
+    assert "simulated" in report  # mock warning present
+    assert "reg-commit-helper-v1-v2-01--baseline--write-commit-msg--r0" \
+        in report  # transcript links / run ids
+    from skilllab.models import load_yaml
+    res = load_yaml(reg_dir / "report.yaml")
+    assert res["verdict"] == "regressed"
+    assert res["counts"]["activation"] == 1
+    pos = [t for t in res["tasks"] if t["task"] == "write-commit-msg"][0]
+    assert pos["baseline"]["activated"] == 1.0
+    assert pos["candidate"]["activated"] == 0.0
+
+
+def test_regression_list_and_report_commands(lab, capsys):
+    _add_variant_v2(lab)
+    main(["regression", "run", "commit-helper", "--baseline", "v1",
+          "--candidate", "v2", "--rollouts", "1"])
+    assert main(["regression", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "reg-commit-helper-v1-v2-01" in out and "regressed" in out
+    assert main(["regression", "report",
+                 "reg-commit-helper-v1-v2-01"]) == 0
+    assert "Regression report: `commit-helper` `v1` → `v2`" in \
+        capsys.readouterr().out
+
+
+def test_regression_rerun_preserves_history(lab):
+    """A second regression of the same pair gets a new id — baseline run
+    data is never overwritten."""
+    _add_variant_v2(lab)
+    r1 = main(["regression", "run", "commit-helper", "--baseline", "v1",
+               "--candidate", "v2", "--rollouts", "1"])
+    r2 = main(["regression", "run", "commit-helper", "--baseline", "v1",
+               "--candidate", "v2", "--rollouts", "1"])
+    assert r1 == r2 == 0
+    ids = {d.name for d in lab.d("regressions").iterdir()}
+    assert "reg-commit-helper-v1-v2-01" in ids
+    assert "reg-commit-helper-v1-v2-02" in ids
+    rid1 = "reg-commit-helper-v1-v2-01--baseline--write-commit-msg--r0"
+    rid2 = "reg-commit-helper-v1-v2-02--baseline--write-commit-msg--r0"
+    assert (lab.runs_dir / rid1 / "run.yaml").is_file()
+    assert (lab.runs_dir / rid2 / "run.yaml").is_file()
+
+
+def test_regression_validates_inputs(lab):
+    _add_variant_v2(lab)
+    # same variant twice -> pointless, rejected
+    assert main(["regression", "run", "commit-helper", "--baseline", "v1",
+                 "--candidate", "v1"]) == 1
+    # unknown variant -> rejected before any run dir is created
+    assert main(["regression", "run", "commit-helper", "--baseline", "v1",
+                 "--candidate", "v9"]) == 1
+    # unknown skill
+    assert main(["regression", "run", "ghost", "--baseline", "v1",
+                 "--candidate", "v2"]) == 1
+    # unknown task in the suite
+    assert main(["regression", "run", "commit-helper", "--baseline", "v1",
+                 "--candidate", "v2", "--tasks", "nope-task"]) == 1
+    assert not [d for d in lab.runs_dir.iterdir()
+                if (d / "run.yaml").exists()]
+
+
+def test_regression_suite_file(lab):
+    _add_variant_v2(lab)
+    (lab.suites_dir / "pos-only.yaml").write_text(
+        "tasks: [write-commit-msg]\n")
+    assert main(["regression", "run", "commit-helper", "--baseline", "v1",
+                 "--candidate", "v2", "--tasks", "pos-only",
+                 "--rollouts", "1"]) == 0
+    from skilllab.models import load_yaml
+    meta = load_yaml(lab.d("regressions")
+                     / "reg-commit-helper-v1-v2-01" / "regression.yaml")
+    assert meta["tasks"] == ["write-commit-msg"]
+
+
+def test_regression_classify_categories(lab):
+    """Unit-test the category rules directly (no runs needed)."""
+    from skilllab.regression import Thresholds, _classify
+    thr = Thresholds(min_runs=1)
+
+    def m(**kw):
+        base = dict(n_runs=3, errors=0, error_rate=0.0, n_final=3,
+                    incomplete=0, success=1.0, score=0.9, activated=1.0,
+                    tokens=100.0, latency=2.0, turns=3.0, variance=0.05)
+        base.update(kw)
+        return base
+
+    task_pos = lab.task("write-commit-msg")
+    task_neg = lab.task("unrelated-refactor")
+    task_perf = lab.task("unrelated-refactor")
+    task_perf = task_perf.model_copy(update={"kind": "performance"})
+
+    cats, imps, notes = _classify(task_pos, m(), m(success=0.0, score=0.0),
+                                  thr, "available")
+    assert "critical" in cats and "quality" in cats
+    cats, _, _ = _classify(task_pos, m(), m(activated=0.0), thr, "available")
+    assert "activation" in cats
+    cats, _, _ = _classify(task_neg, m(activated=0.0), m(activated=1.0),
+                           thr, "available")
+    assert "false-activation" in cats
+    cats, imps, notes = _classify(task_perf, m(), m(tokens=150.0),
+                                  thr, "available")
+    assert "efficiency" in cats and any("token" in n for n in notes)
+    cats, _, _ = _classify(task_perf, m(), m(variance=0.4), thr,
+                           "available")
+    assert "stability" in cats
+    # insufficient data -> notes, still no crash
+    _, _, notes = _classify(task_perf, m(n_runs=1), m(n_runs=1),
+                            Thresholds(min_runs=3), "available")
+    assert any("insufficient" in n for n in notes)
+    # injected mode -> activation checks skipped entirely
+    cats, _, _ = _classify(task_pos, m(), m(activated=0.0), thr, "injected")
+    assert "activation" not in cats
+    # missing finals -> inconclusive note, no outcome verdicts
+    _, _, notes = _classify(task_perf, m(n_final=0), m(n_final=0), thr,
+                            "available")
+    assert any("no final evaluations" in n for n in notes)
+
+
+def test_regression_handles_missing_evals(lab):
+    """Runs with no eval.yaml are reported as data gaps, not failures."""
+    _add_variant_v2(lab)
+    main(["regression", "run", "commit-helper", "--baseline", "v1",
+          "--candidate", "v2", "--rollouts", "1"])
+    # delete one eval -> report must show incomplete, not crash
+    rid = "reg-commit-helper-v1-v2-01--candidate--write-commit-msg--r0"
+    (lab.runs_dir / rid / "eval.yaml").unlink()
+    assert main(["regression", "report",
+                 "reg-commit-helper-v1-v2-01"]) == 0
+    from skilllab.regression import analyze
+    res = analyze(lab, "reg-commit-helper-v1-v2-01")
+    task = [t for t in res["tasks"] if t["task"] == "write-commit-msg"][0]
+    assert task["candidate"]["incomplete"] >= 1

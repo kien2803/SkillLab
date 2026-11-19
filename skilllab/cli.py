@@ -278,12 +278,13 @@ def _run_and_eval(lab: Lab, exp: Experiment, arm_filter: str | None,
             n = exp.rollouts_per_arm if not limit else min(
                 limit, exp.rollouts_per_arm)
             for i in range(n):
-                rec = run_rollout(lab, exp, arm, tid, i, batch)
+                rec = run_rollout(lab, exp, arm, tid, i, batch,
+                                  overwrite=force)
                 try:
                     ev = evaluate_run(lab, rec, lab.task(tid),
                                       lab.runs_dir / rec.run_id)
                     tag = "ERR " if rec.status == "error" else "ok  "
-                    print(f"{tag}{rec.run_id} success={ev.success}"
+                    print(f"{tag}{rec.run_id} eval={ev.status}"
                           f" score={ev.rubric_score}")
                 except Exception as e:  # noqa: BLE001 - don't kill the batch
                     print(f"warn eval failed for {rec.run_id}: "
@@ -337,13 +338,21 @@ def cmd_eval(args) -> int:
                 scores[k] = float(v)
             except ValueError as e:
                 raise LabError(f"--score value must be a number: '{kv}'") from e
-        ev = apply_human_scores(lab, rec, task, run_dir, scores)
+        comments: dict[str, str] = {}
+        for kv in args.comment or []:
+            k, sep, v = kv.partition("=")
+            if not sep or not k:
+                raise LabError("--comment expects 'criterion=text', "
+                               f"got '{kv}'")
+            comments[k] = v
+        ev = apply_human_scores(lab, rec, task, run_dir, scores, comments)
         print(f"applied human score(s): {', '.join(sorted(scores))}")
     else:
         ev = evaluate_run(lab, rec, task, run_dir)
-    print(f"success={ev.success} rubric_score={ev.rubric_score}")
+    print(f"eval={ev.status} success={ev.success} "
+          f"rubric_score={ev.rubric_score}")
     for c in ev.checks:
-        print(f"  {c.id:20} {c.method:14} passed={c.passed} score={c.score}")
+        print(f"  {c.id:20} {c.method:14} {c.status:8} score={c.score}")
     return 0
 
 
@@ -516,9 +525,16 @@ def cmd_export(args) -> int:
 
 def cmd_import(args) -> int:
     from .share import import_pack
-    counts = import_pack(_lab(args), Path(args.src), args.force)
-    for d, n in counts.items():
+    res = import_pack(_lab(args), Path(args.src), args.force)
+    for d, n in res["imported"].items():
         print(f"imported {n} file(s) into {d}/")
+    for s in res["skipped"]:
+        print(f"skipped existing {s} (use --force to overwrite)")
+    for s in res["rejected"]:
+        print(f"rejected {s}", file=sys.stderr)
+    if res["rejected"]:
+        print(f"{len(res['rejected'])} file(s) rejected",
+              file=sys.stderr)
     return 0
 
 
@@ -556,9 +572,79 @@ def cmd_insight_refute(args) -> int:
     return 0
 
 
+def cmd_insight_confirm(args) -> int:
+    from .insights import confirm
+    p = confirm(_lab(args), args.id)
+    print(f"confirmed -> {p}")
+    return 0
+
+
+def cmd_experiment_validate(args) -> int:
+    """Dry-run the pre-flight checks — no run dirs, no LLM calls."""
+    from .engine import validate_experiment
+    lab = _lab(args)
+    exp = lab.experiment(args.exp)
+    errors, warnings = validate_experiment(lab, exp)
+    for w in warnings:
+        print(f"warning: {w}")
+    for e in errors:
+        print(f"error: {e}", file=sys.stderr)
+    if errors:
+        print(f"experiment '{exp.id}' is INVALID ({len(errors)} error(s))",
+              file=sys.stderr)
+        return 1
+    print(f"experiment '{exp.id}' is valid"
+          + (f" ({len(warnings)} warning(s))" if warnings else ""))
+    return 0
+
+
 def cmd_compare(args) -> int:
     from .report import compare_table
     print(compare_table(_lab(args), args.exp))
+    return 0
+
+
+def cmd_regression_run(args) -> int:
+    from .regression import run_regression
+    lab = _lab(args)
+    overrides: dict[str, float] = {}
+    for kv in args.threshold or []:
+        k, sep, v = kv.partition("=")
+        if not sep or not k:
+            raise LabError(f"--threshold expects 'key=value', got '{kv}'")
+        try:
+            overrides[k] = float(v)
+        except ValueError as e:
+            raise LabError(f"--threshold value must be a number: '{kv}'") from e
+    reg_id = run_regression(
+        lab, args.skill, args.baseline, args.candidate, args.tasks,
+        model=args.model, mode=args.mode, rollouts=args.rollouts,
+        overrides=overrides or None)
+    report = lab.d("regressions") / reg_id / "report.md"
+    print(f"regression '{reg_id}' complete — report: {report}")
+    return 0
+
+
+def cmd_regression_report(args) -> int:
+    from .regression import write_report
+    lab = _lab(args)
+    p = write_report(lab, args.id)
+    print(p.read_text())
+    print(f"(written to {p})")
+    return 0
+
+
+def cmd_regression_list(args) -> int:
+    from .regression import list_regressions
+    regs = list_regressions(_lab(args))
+    if not regs:
+        print("no regressions recorded yet")
+        return 0
+    for r in regs:
+        verdict = r.get("verdict") or "—"
+        print(f"{r['id']:44} {r.get('skill','?'):20} "
+              f"{r.get('baseline','?')}→{r.get('candidate','?'):12} "
+              f"{r.get('status','?'):9} {verdict}")
     return 0
 
 
@@ -591,11 +677,17 @@ def build_parser() -> argparse.ArgumentParser:
     x = ss.add_parser("new"); x.add_argument("id"); x.set_defaults(f=cmd_experiment_new)
     x = ss.add_parser("list"); x.set_defaults(f=cmd_experiment_list)
     x = ss.add_parser("conclude"); x.add_argument("exp"); x.add_argument("--conclusion", required=True); x.add_argument("--insight", action="append"); x.set_defaults(f=cmd_experiment_conclude)
+    x = ss.add_parser("validate"); x.add_argument("exp"); x.set_defaults(f=cmd_experiment_validate)
 
     s = sub.add_parser("run"); s.add_argument("exp"); s.add_argument("--arm"); s.add_argument("--limit", type=int); s.add_argument("--batch"); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_run)
     s = sub.add_parser("rerun"); s.add_argument("exp"); s.add_argument("--arm"); s.add_argument("--limit", type=int); s.add_argument("--model"); s.add_argument("--batch"); s.add_argument("--force", action="store_true"); s.set_defaults(f=cmd_rerun)
-    s = sub.add_parser("eval"); s.add_argument("run_id"); s.add_argument("--score", action="append"); s.set_defaults(f=cmd_eval)
+    s = sub.add_parser("eval"); s.add_argument("run_id"); s.add_argument("--score", action="append"); s.add_argument("--comment", action="append"); s.set_defaults(f=cmd_eval)
     s = sub.add_parser("compare"); s.add_argument("exp"); s.set_defaults(f=cmd_compare)
+
+    s = sub.add_parser("regression"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("run"); x.add_argument("skill"); x.add_argument("--baseline", required=True); x.add_argument("--candidate", required=True); x.add_argument("--tasks", default="default"); x.add_argument("--model"); x.add_argument("--mode", choices=["available", "injected"]); x.add_argument("--rollouts", type=int); x.add_argument("--threshold", action="append"); x.set_defaults(f=cmd_regression_run)
+    x = ss.add_parser("report"); x.add_argument("id"); x.set_defaults(f=cmd_regression_report)
+    x = ss.add_parser("list"); x.set_defaults(f=cmd_regression_list)
     s = sub.add_parser("transcript"); s.add_argument("run_id"); s.add_argument("--full", action="store_true"); s.set_defaults(f=cmd_transcript)
     s = sub.add_parser("diff"); s.add_argument("run_a"); s.add_argument("run_b"); s.set_defaults(f=cmd_diff)
     s = sub.add_parser("status"); s.set_defaults(f=cmd_status)
@@ -612,6 +704,7 @@ def build_parser() -> argparse.ArgumentParser:
     x = ss.add_parser("show"); x.add_argument("id"); x.set_defaults(f=cmd_insight_show)
     x = ss.add_parser("promote"); x.add_argument("id"); x.set_defaults(f=cmd_insight_promote)
     x = ss.add_parser("refute"); x.add_argument("id"); x.set_defaults(f=cmd_insight_refute)
+    x = ss.add_parser("confirm"); x.add_argument("id"); x.set_defaults(f=cmd_insight_confirm)
     return p
 
 

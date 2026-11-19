@@ -2,3 +2,11 @@
 __pycache__/
 *.egg-info/
 .pytest_cache/
+
+# taste-skill checker artifacts (regenerable)
+.taste-skill/
+
+# local skill tooling (installed via npx skills)
+.agents/
+.claude/
+.hallmark/

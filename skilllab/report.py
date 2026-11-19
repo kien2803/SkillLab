@@ -103,6 +103,7 @@ def build_report(lab: Lab, exp: Experiment) -> str:
 
     def metrics(rows):
         errs = sum(1 for r, _ in rows if r.status == "error")
+        inc = 0
         act, false_act, tta = [], [], []
         scores, succ, toks, turns, load = [], [], [], [], []
         for rec, ev in rows:
@@ -134,9 +135,16 @@ def build_report(lab: Lab, exp: Experiment) -> str:
             if ev and rec.status != "error":
                 if ev.rubric_score is not None:
                     scores.append(ev.rubric_score)
-                succ.append(1.0 if ev.success else 0.0)
+                # only final (passed/failed) evals feed the success rate;
+                # pending/error evals are counted separately, not as fails
+                if ev.status in ("passed", "failed"):
+                    succ.append(1.0 if ev.status == "passed" else 0.0)
+                else:
+                    inc += 1
+            elif ev is None and rec.status != "error":
+                inc += 1
         return {
-            "n": len(rows), "errs": errs, "act": _mean(act),
+            "n": len(rows), "errs": errs, "inc": inc, "act": _mean(act),
             "false_act": _mean(false_act), "tta": _mean(tta),
             "score": _mean(scores), "succ": _mean(succ),
             "toks": _mean(toks), "load": _mean(load),
@@ -145,7 +153,8 @@ def build_report(lab: Lab, exp: Experiment) -> str:
         }
 
     def row_cells(name, m):
-        return (f"| {name} | {m['n']} | {m['errs']} | {_fmt(m['act'], 1)}"
+        return (f"| {name} | {m['n']} | {m['errs']} | {m['inc']}"
+                f" | {_fmt(m['act'], 1)}"
                 f" | {_fmt(m['false_act'], 1)} | {_fmt(m['tta'])}"
                 f" | {_fmt(m['score'])}"
                 f" | {_fmt(m['succ'], 1)} | {_fmt(m['toks'])}"
@@ -153,9 +162,10 @@ def build_report(lab: Lab, exp: Experiment) -> str:
                 f" | {_fmt(m['turns'])} | {_fmt(m['var'])} |")
 
     lines += ["## Arms", "",
-              "| arm | n | err | activation | false-act | act@turn | rubric |"
-              " success | tokens | load-cost | turns | variance |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "| arm | n | err | incomplete | activation | false-act |"
+              " act@turn | rubric | success | tokens | load-cost | turns |"
+              " variance |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
 
     arm_scores: dict[str, float | None] = {}
     arm_rates: dict[str, dict] = {}
@@ -176,10 +186,10 @@ def build_report(lab: Lab, exp: Experiment) -> str:
         by_model_arm.setdefault((mname, r[0].arm), []).append(r)
     if len(models_seen) > 1:
         lines += ["", "## By model (per arm)", "",
-                  "| model · arm | n | err | activation | false-act |"
-                  " act@turn | rubric | success | tokens | load-cost |"
-                  " turns | variance |",
-                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+                  "| model · arm | n | err | incomplete | activation |"
+                  " false-act | act@turn | rubric | success | tokens |"
+                  " load-cost | turns | variance |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for (mname, aname), rows in sorted(by_model_arm.items()):
             lines.append(row_cells(f"{mname} · {aname}", metrics(rows)))
 
@@ -289,6 +299,10 @@ def build_report(lab: Lab, exp: Experiment) -> str:
     lines += ["", "## Runs", ""]
     for rec, ev in runs:
         flag = "" if rec.status == "ok" else f" ⚠ {rec.error}"
+        if ev is not None and ev.status in ("pending", "error"):
+            flag += f" ⚠ eval={ev.status}"
+        elif ev is None:
+            flag += " ⚠ eval=missing"
         score = f" score={ev.rubric_score:.2f}" if ev and ev.rubric_score is not None else ""
         lines.append(f"- `{rec.run_id}`{score}{flag}")
     return "\n".join(lines) + "\n"
@@ -309,10 +323,11 @@ def compare_table(lab: Lab, exp_id: str) -> str:
     cells: dict[tuple[str, str], list[float]] = {}
     tasks: list[str] = []
     for rec, ev in runs:
-        if rec.status == "error" or not ev:
+        if rec.status == "error" or not ev \
+                or ev.status not in ("passed", "failed"):
             continue
         s = ev.rubric_score if ev.rubric_score is not None else (
-            1.0 if ev.success else 0.0)
+            1.0 if ev.status == "passed" else 0.0)
         cells.setdefault((rec.arm, rec.task), []).append(s)
         if rec.task not in tasks:
             tasks.append(rec.task)

@@ -89,10 +89,17 @@ TaskKind = Literal["performance", "activation-positive", "activation-negative"]
 
 
 class Check(BaseModel):
-    type: Literal["command", "file-exists", "script"]
+    type: Literal["command", "file-exists", "script", "file-content",
+                  "json"]
     command: Optional[str] = None   # for type=command
-    path: Optional[str] = None      # for type=file-exists / script
+    path: Optional[str] = None      # for file-exists / script / file-content / json
     id: Optional[str] = None        # name used by rubric criteria
+    contains: Optional[str] = None  # file-content: literal substring required
+    regex: Optional[str] = None     # file-content: pattern that must match
+    equals: Optional[str] = None    # file-content: whole-file comparison
+    keys: list[str] = Field(default_factory=list)   # json: required top-level keys
+    field: Optional[str] = None     # json: dotted path to compare
+    value: Optional[str] = None     # json: expected scalar for `field`
 
     def name(self) -> str:
         return self.id or self.command or self.path or self.type
@@ -234,15 +241,48 @@ class RunRecord(BaseModel):
 
 # ---------- eval ----------
 
+CheckStatus = Literal["pending", "passed", "failed", "error"]
+EvalStatus = Literal["pending", "passed", "failed", "error"]
+
+
 class CheckResult(BaseModel):
     id: str
     method: Literal["deterministic", "llm-judge", "human"]
-    passed: Optional[bool] = None      # None = pending (human) / error
+    passed: Optional[bool] = None      # legacy field — synced with status
+    status: Optional[CheckStatus] = None  # None derives from `passed`
     score: Optional[float] = None
     detail: str = ""
+    judge_model: Optional[str] = None   # provenance for llm-judge criteria
+
+    @model_validator(mode="after")
+    def _sync_status(self) -> "CheckResult":
+        """Keep `status` and `passed` consistent (old eval.yaml has no status)."""
+        if self.status is None:
+            self.status = ("pending" if self.passed is None
+                           else ("passed" if self.passed else "failed"))
+        elif self.passed is None:
+            self.passed = {"passed": True, "failed": False}.get(self.status)
+        return self
 
 
 class EvalResult(BaseModel):
     checks: list[CheckResult] = Field(default_factory=list)
     rubric_score: Optional[float] = None
     success: bool = False
+    status: Optional[EvalStatus] = None   # pending | passed | failed | error
+    evaluated_at: Optional[str] = None    # ISO timestamp (provenance)
+
+    @model_validator(mode="after")
+    def _sync_status(self) -> "EvalResult":
+        """Derive missing status from checks/success — old eval.yaml files
+        predate the lifecycle and only carry `success`."""
+        if self.status is None:
+            states = {c.status for c in self.checks}
+            for s in ("error", "pending", "failed"):
+                if s in states:
+                    self.status = s
+                    break
+            else:
+                self.status = ("passed" if self.success else
+                               ("failed" if states else "error"))
+        return self

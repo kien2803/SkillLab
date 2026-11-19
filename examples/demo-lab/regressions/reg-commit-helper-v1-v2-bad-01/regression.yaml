@@ -1,0 +1,18 @@
+id: reg-commit-helper-v1-v2-bad-01
+skill: commit-helper
+baseline: v1
+candidate: v2-bad
+suite: default
+tasks:
+- unrelated-refactor
+- write-commit-msg
+model: mock
+temperature: 0.0
+injection_mode: available
+harness: standard-tools-v1
+rollouts_per_arm: 3
+thresholds: {}
+experiment: reg-commit-helper-v1-v2-bad-01
+created: '2026-11-18T21:06:28+07:00'
+status: analyzed
+verdict: regressed

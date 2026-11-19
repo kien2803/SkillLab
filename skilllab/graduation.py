@@ -59,10 +59,10 @@ def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
     ctrl_scores: dict[str, dict[str, list[float]]] = {}
 
     def score_of(ev: EvalResult | None) -> float | None:
-        if ev is None:
-            return None
+        if ev is None or ev.status not in ("passed", "failed"):
+            return None  # pending/error evals aren't evidence
         return ev.rubric_score if ev.rubric_score is not None \
-            else (1.0 if ev.success else 0.0)
+            else (1.0 if ev.status == "passed" else 0.0)
 
     for rec, ev in skill_runs:
         task = lab.task(rec.task)

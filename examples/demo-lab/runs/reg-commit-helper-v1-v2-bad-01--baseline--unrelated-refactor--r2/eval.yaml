@@ -1,0 +1,12 @@
+checks:
+- id: OUTPUT.md
+  method: deterministic
+  passed: true
+  status: passed
+  score: 1.0
+  detail: OUTPUT.md exists
+  judge_model: null
+rubric_score: null
+success: true
+status: passed
+evaluated_at: '2026-11-18T14:06:28.780321+00:00'

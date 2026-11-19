@@ -1,0 +1,33 @@
+id: reg-commit-helper-v1-v2-bad-01
+title: 'Regression commit-helper: v1 → v2-bad'
+hypothesis: v2-bad does not regress vs v1 on 'default'
+independent_var: skill_variant
+fixed:
+  model: mock
+  temperature: 0.0
+  seed_policy: varied
+  harness: standard-tools-v1
+  injection_mode: available
+arms:
+- name: baseline
+  skill: commit-helper@v1
+  model: null
+  injection_mode: null
+- name: candidate
+  skill: commit-helper@v2-bad
+  model: null
+  injection_mode: null
+tasks:
+- unrelated-refactor
+- write-commit-msg
+rollouts_per_arm: 3
+metrics:
+- activation_rate
+- false_activation
+- rubric_score
+- token_cost
+- turns
+- outcome_variance
+status: analyzed
+conclusion: null
+insights_generated: []

@@ -11,9 +11,14 @@ from datetime import date
 from pathlib import Path
 
 from .lab import Lab, LabError
-from .models import dump_yaml, load_yaml
+from .models import TaskSpec, dump_yaml, load_yaml
 
 PACK_KIND = "skilllab-pack"
+PACK_VERSION = 1
+
+# Only these directories may travel inside a pack — anything else in a
+# manifest is rejected outright (a manifest is untrusted input).
+ALLOWED_DIRS = ("insights", "principles", "tasks")
 
 
 def export_pack(lab: Lab, out: Path, include_tasks: bool = False) -> Path:
@@ -23,7 +28,7 @@ def export_pack(lab: Lab, out: Path, include_tasks: bool = False) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     manifest = {
         "kind": PACK_KIND,
-        "version": 1,
+        "version": PACK_VERSION,
         "created": date.today().isoformat(),
         "contents": [],
     }
@@ -43,30 +48,63 @@ def export_pack(lab: Lab, out: Path, include_tasks: bool = False) -> Path:
     return out
 
 
-def import_pack(lab: Lab, src: Path, force: bool = False) -> dict[str, int]:
+def import_pack(lab: Lab, src: Path, force: bool = False) -> dict:
+    """Import a pack. Returns {"imported": {dir: n}, "skipped": [...],
+    "rejected": [...]} — nothing is written unless it passes validation."""
     src = src.resolve()
     manifest = load_yaml(src / "pack.yaml")
     if manifest.get("kind") != PACK_KIND:
         raise LabError(f"{src} is not a skilllab pack (no pack.yaml)")
-    counts: dict[str, int] = {}
-    skipped: list[str] = []
-    for d in manifest.get("contents", []):
+    if not isinstance(manifest.get("version"), int):
+        raise LabError("pack.yaml has no integer 'version'")
+    if manifest["version"] > PACK_VERSION:
+        raise LabError(f"pack version {manifest['version']} is newer than "
+                       f"supported ({PACK_VERSION})")
+    contents = manifest.get("contents")
+    if not isinstance(contents, list) \
+            or not all(isinstance(c, str) for c in contents):
+        raise LabError("pack.yaml 'contents' must be a list of dir names")
+    bad = [c for c in contents
+           if c not in ALLOWED_DIRS or c != Path(c).name]
+    if bad:
+        raise LabError(f"pack lists unsupported/unsafe entries: "
+                       f"{', '.join(bad)}")
+
+    res: dict = {"imported": {}, "skipped": [], "rejected": []}
+    for d in contents:
+        base = src / d
+        if not base.is_dir():
+            continue
         n = 0
-        for p in (src / d).rglob("*"):
+        for p in sorted(base.rglob("*")):
+            rel = p.relative_to(base)
+            if p.is_symlink():
+                res["rejected"].append(f"{d}/{rel} (symlink)")
+                continue
             if not p.is_file():
                 continue
-            rel = p.relative_to(src / d)
             dest = lab.d(d) / rel
+            # resolved destination must stay inside the target dir
+            try:
+                inside = dest.resolve().is_relative_to(
+                    lab.d(d).resolve())
+            except OSError:
+                inside = False
+            if not inside:
+                res["rejected"].append(f"{d}/{rel} (path escapes)")
+                continue
+            if d == "tasks" and p.name == "task.yaml":
+                try:
+                    TaskSpec(**load_yaml(p))
+                except Exception as e:  # noqa: BLE001 - report, don't crash
+                    res["rejected"].append(
+                        f"{d}/{rel} (invalid task.yaml: {e})")
+                    continue
             if dest.exists() and not force:
-                skipped.append(str(dest.relative_to(lab.root)))
+                res["skipped"].append(str(dest.relative_to(lab.root)))
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, dest)
             n += 1
-        counts[d] = n
-    if skipped:
-        print(f"skipped {len(skipped)} existing file(s) (use --force to "
-              "overwrite):")
-        for s in skipped:
-            print(f"  {s}")
-    return counts
+        res["imported"][d] = n
+    return res

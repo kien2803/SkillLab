@@ -1,18 +1,132 @@
-<!doctype html><meta charset=utf-8><title>Skill Lab — demo-lab</title><style>
-body{font-family:ui-monospace,Menlo,monospace;max-width:1100px;margin:2rem auto;
-padding:0 1rem;color:#222;background:#fafafa}
-h1{border-bottom:2px solid #333;padding-bottom:.3rem}
-h2{margin-top:2rem}
-table{border-collapse:collapse;width:100%;margin:1rem 0}
-th,td{border:1px solid #ccc;padding:.4rem .6rem;text-align:left;font-size:.9rem}
-th{background:#eee}
-a{color:#06c}
-nav{margin:1rem 0;font-size:.9rem}
-pre{background:#f0f0f0;padding:1rem;overflow-x:auto;font-size:.85rem}
-.sev-error{color:#b00}.sev-warn{color:#a60}.sev-info{color:#668}
-.msg{border:1px solid #ddd;margin:.5rem 0;padding:.5rem .8rem;border-radius:4px}
-.role-system{background:#eef}.role-user{background:#efe}
-.role-assistant{background:#fff}.role-tool{background:#f6f6f6;color:#555}
-.tag{display:inline-block;background:#ddd;border-radius:3px;padding:.1rem .4rem;
-font-size:.8rem;margin-right:.3rem}
-</style><h1>Skill Lab — demo-lab</h1><nav><a href="index.html">index</a> · <a href="experiments.html">experiments</a> · <a href="insights.html">insights</a></nav><h2>Skills</h2><table><tr><th>id</th><th>kind</th><th>status</th><th>variants</th><th>findings</th><th>description</th></tr><tr><td><a href="skill-commit-helper.html">commit-helper</a></td><td>skill-md</td><td>draft</td><td>v1, v2-bad</td><td>8</td><td>Use when the user asks to write or improve a git commit message, draft a changel</td></tr></table><h2>Experiments</h2><table><tr><th>id</th><th>title</th><th>status</th><th>arms</th><th>runs</th></tr><tr><td><a href="experiments.html#exp-content-quality">exp-content-quality</a></td><td>Does specific trigger wording improve activation accuracy?</td><td>running</td><td>3</td><td>2</td></tr><tr><td><a href="experiments.html#exp-trigger-wording">exp-trigger-wording</a></td><td>Does specific trigger wording improve activation accuracy?</td><td>concluded</td><td>3</td><td>24</td></tr></table><h2>Insights & principles</h2><table><tr><th>kind</th><th>id</th><th>status</th><th>confidence</th><th>evidence</th></tr><tr><td>insight</td><td>specific-trigger-examples-beat-vague-description</td><td>candidate</td><td>candidate</td><td>exp-trigger-wording</td></tr><tr><td>principle</td><td>specific-trigger-descriptions</td><td>promoted</td><td>confirmed</td><td>exp-trigger-wording</td></tr></table>
+<!doctype html><html lang=en><meta charset=utf-8><meta name="viewport" content="width=device-width, initial-scale=1"><title>SkillLab — demo-lab — SkillLab</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400..700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"><style>
+:root{--bg:#eef0f3;--panel:#ffffff;--panel2:#f4f6f8;--border:#dde1e7;
+--text:#0b0c0e;--muted:#5d6470;--accent:#1f2de6;--ok:#1d7a46;--bad:#9a2828;
+--warn:#6d4e0c;--info:#1f2de6;--purple:#6d4fc2;
+--font:"Familjen Grotesk",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+--mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{font-family:var(--font);margin:0;background:var(--bg);color:var(--text);
+font-size:14px;line-height:1.5}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.topbar{display:flex;align-items:center;gap:1.2rem;padding:.7rem 1.4rem;
+background:var(--panel);border-bottom:1px solid var(--border);
+position:sticky;top:0;z-index:10}
+.topbar .brand{display:inline-flex;align-items:center;gap:.5rem;
+font-weight:600;color:var(--text);font-size:1.05rem;letter-spacing:-.01em}
+.topbar .brand::before{content:"S";display:inline-flex;align-items:center;
+justify-content:center;width:22px;height:22px;border-radius:5px;
+background:var(--accent);color:#fff;font:600 13px/1 var(--mono)}
+.topbar nav{display:flex;gap:.2rem;flex-wrap:wrap}
+.topbar nav a{color:var(--muted);padding:.3rem .7rem;border-radius:5px;
+font-size:.88rem}
+.topbar nav a:hover{background:var(--panel2);color:var(--text);text-decoration:none}
+.topbar nav a.active{background:rgb(31 45 230/.08);color:var(--accent);font-weight:600}
+.wrap{max-width:1280px;margin:0 auto;padding:1.4rem}
+h1{font-size:1.5rem;margin:.2rem 0 1rem;letter-spacing:-.02em}
+h2{font-size:1.15rem;margin:1.8rem 0 .6rem;color:var(--text);
+letter-spacing:-.02em}
+h3{font:500 .78rem/1.4 var(--mono);margin:1.2rem 0 .4rem;color:var(--muted);
+text-transform:uppercase;letter-spacing:.06em}
+.grid{display:grid;gap:.9rem}
+.cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:6px;
+padding:.9rem 1rem;box-shadow:0 1px 2px rgb(11 12 14/.04)}
+.card .num{font-size:1.7rem;font-weight:600;line-height:1.1;
+letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.card .lbl{color:var(--muted);font:500 .72rem/1.3 var(--mono);
+text-transform:uppercase;letter-spacing:.06em}
+.card .sub{color:var(--muted);font-size:.78rem;margin-top:.15rem}
+.card.bad .num{color:var(--bad)}.card.ok .num{color:var(--ok)}
+.card.warn .num{color:var(--warn)}
+table{border-collapse:collapse;width:100%;margin:.6rem 0;font-size:.86rem}
+th,td{padding:.5rem .7rem;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--muted);font:500 .72rem/1.3 var(--mono);text-transform:uppercase;
+letter-spacing:.06em;background:var(--panel);position:sticky;top:48px}
+table.sortable th{cursor:pointer;user-select:none}
+table.sortable th:hover{color:var(--text)}
+table.sortable th.sorted-asc::after{content:" ▲";font-size:.6rem}
+table.sortable th.sorted-desc::after{content:" ▼";font-size:.6rem}
+tr:hover td{background:var(--panel2)}
+.num-cell{font-variant-numeric:tabular-nums;text-align:right}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:99px;
+font:500 .74rem/1.3 var(--mono);letter-spacing:.01em}
+.b-ok{background:rgb(29 122 70/.10);color:var(--ok)}
+.b-bad{background:rgb(154 40 40/.10);color:var(--bad)}
+.b-warn{background:rgb(109 78 12/.12);color:var(--warn)}
+.b-info{background:rgb(31 45 230/.09);color:var(--info)}
+.b-purple{background:rgb(109 79 194/.10);color:var(--purple)}
+.b-muted{background:var(--bg);color:var(--muted)}
+.muted{color:var(--muted)}
+.empty{border:1px dashed var(--border);border-radius:6px;padding:1.6rem;
+text-align:center;color:var(--muted);margin:.8rem 0}
+.note{border-left:3px solid var(--warn);background:rgb(109 78 12/.06);
+padding:.6rem .9rem;border-radius:0 6px 6px 0;margin:.8rem 0;font-size:.85rem}
+.note.info{border-color:var(--info);background:rgb(31 45 230/.06)}
+.note.err{border-color:var(--bad);background:rgb(154 40 40/.06)}
+.bar-row{display:flex;align-items:center;gap:.6rem;margin:.28rem 0}
+.bar-row .bar-lbl{width:180px;font-size:.82rem;overflow:hidden;
+text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
+.bar-track{flex:1;background:#e2e5ea;border-radius:4px;height:16px;
+overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;background:var(--accent);
+min-width:2px}
+.bar-fill.ok{background:var(--ok)}.bar-fill.bad{background:var(--bad)}
+.bar-fill.warn{background:var(--warn)}.bar-fill.purple{background:var(--purple)}
+.bar-val{width:64px;text-align:right;font-size:.8rem;
+font-variant-numeric:tabular-nums;flex-shrink:0}
+.msg{border:1px solid var(--border);border-radius:6px;margin:.4rem 0;
+padding:.5rem .8rem;background:var(--panel)}
+.msg pre{margin:.3rem 0 0;white-space:pre-wrap;word-break:break-word;
+font:400 .78rem/1.5 var(--mono);color:var(--muted)}
+.role-system{border-left:3px solid var(--purple)}
+.role-user{border-left:3px solid var(--info)}
+.role-assistant{border-left:3px solid var(--ok)}
+.role-tool{border-left:3px solid var(--border);background:var(--panel2)}
+.role-badge{font:500 .7rem/1.3 var(--mono);text-transform:uppercase;
+letter-spacing:.06em;color:var(--muted)}
+.filter{width:100%;max-width:340px;background:var(--panel);
+border:1px solid var(--border);border-radius:6px;color:var(--text);
+padding:.45rem .7rem;font-size:.85rem;margin:.3rem 0}
+.filter:focus{outline:2px solid rgb(31 45 230/.4);outline-offset:1px;
+border-color:var(--accent)}
+.section{background:var(--panel);border:1px solid var(--border);
+border-radius:6px;padding:1rem 1.2rem;margin:.9rem 0;
+box-shadow:0 1px 2px rgb(11 12 14/.04)}
+details{margin:.4rem 0}
+summary{cursor:pointer;color:var(--accent);font-size:.85rem}
+pre.raw{background:var(--panel2);border:1px solid var(--border);
+border-radius:6px;padding:.8rem;overflow-x:auto;
+font:400 .78rem/1.55 var(--mono);
+color:var(--muted);max-height:420px;overflow-y:auto}
+code{font-family:var(--mono);font-size:.9em}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:.9rem}
+@media(max-width:900px){.two-col{grid-template-columns:1fr}
+.bar-row .bar-lbl{width:110px}}
+@media(max-width:640px){.topbar{flex-wrap:wrap}.wrap{padding:.8rem}
+th,td{padding:.4rem}}
+</style><div class="topbar"><span class="brand">SkillLab</span><nav><a href="index.html" class="active">Overview</a><a href="skills.html" class="">Skills</a><a href="benchmarks.html" class="">Benchmarks</a><a href="regressions.html" class="">Regressions</a><a href="experiments.html" class="">Experiments</a><a href="insights.html" class="">Knowledge</a></nav></div><div class="wrap"><h1>SkillLab — demo-lab</h1><div class="grid cards"><div class="card "><div class="num">1</div><div class="lbl">skills</div></div><div class="card "><div class="num">3</div><div class="lbl">experiments</div></div><div class="card "><div class="num">38</div><div class="lbl">runs</div></div><div class="card "><div class="num">0</div><div class="lbl">failed runs</div></div><div class="card bad"><div class="num">1</div><div class="lbl">regression alerts</div></div></div><div class="note">All runs on this page use the <b>mock</b> model — data is simulated, not real-world model performance.</div><h2>Regression alerts</h2><table class="sortable"><thead><tr><th>regression</th><th>skill</th><th>variants</th><th>verdict</th><th>created</th></tr></thead><tbody><tr data-frow><td><a href="regressions.html#reg-commit-helper-v1-v2-bad-01">reg-commit-helper-v1-v2-bad-01</a></td><td>commit-helper</td><td>v1 → v2-bad</td><td><span class="badge b-bad">regressed</span></td><td>2026-11-18T21:06</td></tr></tbody></table><h2>Recent runs</h2><table class="sortable"><thead><tr><th>run</th><th>arm</th><th>task</th><th>run</th><th>eval</th><th>score</th><th>finished</th></tr></thead><tbody><tr data-frow><td><a href="run-reg-commit-helper-v1-v2-bad-01--candidate--write-commit-msg--r2.html">reg-commit-helper-v1-v2-bad-01--candidate--write-commit-msg--r2</a></td><td>candidate</td><td>write-commit-msg</td><td><span class="badge b-ok">ok</span></td><td><span class="badge b-ok">passed</span></td><td><span class="num-cell">—</span></td><td>2026-11-18T14:06:28</td></tr><tr data-frow><td><a href="run-reg-commit-helper-v1-v2-bad-01--candidate--write-commit-msg--r1.html">reg-commit-helper-v1-v2-bad-01--candidate--write-commit-msg--r1</a></td><td>candidate</td><td>write-commit-msg</td><td><span class="badge b-ok">ok</span></td><td><span class="badge b-ok">passed</span></td><td><span class="num-cell">—</span></td><td>2026-11-18T14:06:28</td></tr><tr data-frow><td><a href="run-reg-commit-helper-v1-v2-bad-01--candidate--write-commit-msg--r0.html">reg-commit-helper-v1-v2-bad-01--candidate--write-commit-msg--r0</a></td><td>candidate</td><td>write-commit-msg</td><td><span class="badge b-ok">ok</span></td><td><span class="badge b-ok">passed</span></td><td><span class="num-cell">—</span></td><td>2026-11-18T14:06:28</td></tr><tr data-frow><td><a href="run-reg-commit-helper-v1-v2-bad-01--candidate--unrelated-refactor--r2.html">reg-commit-helper-v1-v2-bad-01--candidate--unrelated-refactor--r2</a></td><td>candidate</td><td>unrelated-refactor</td><td><span class="badge b-ok">ok</span></td><td><span class="badge b-ok">passed</span></td><td><span class="num-cell">—</span></td><td>2026-11-18T14:06:28</td></tr><tr data-frow><td><a href="run-reg-commit-helper-v1-v2-bad-01--candidate--unrelated-refactor--r1.html">reg-commit-helper-v1-v2-bad-01--candidate--unrelated-refactor--r1</a></td><td>candidate</td><td>unrelated-refactor</td><td><span class="badge b-ok">ok</span></td><td><span class="badge b-ok">passed</span></td><td><span class="num-cell">—</span></td><td>2026-11-18T14:06:28</td></tr><tr data-frow><td><a href="run-reg-commit-helper-v1-v2-bad-01--candidate--unrelated-refactor--r0.html">reg-commit-helper-v1-v2-bad-01--candidate--unrelated-refactor--r0</a></td><td>candidate</td><td>unrelated-refactor</td><td><span class="badge b-ok">ok</span></td><td><span class="badge b-ok">passed</span></td><td><span class="num-cell">—</span></td><td>2026-11-18T14:06:28</td></tr><tr data-frow><td><a href="run-reg-commit-helper-v1-v2-bad-01--baseline--write-commit-msg--r2.html">reg-commit-helper-v1-v2-bad-01--baseline--write-commit-msg--r2</a></td><td>baseline</td><td>write-commit-msg</td><td><span class="badge b-ok">ok</span></td><td><span class="badge b-ok">passed</span></td><td><span class="num-cell">—</span></td><td>2026-11-18T14:06:28</td></tr><tr data-frow><td><a href="run-reg-commit-helper-v1-v2-bad-01--baseline--write-commit-msg--r1.html">reg-commit-helper-v1-v2-bad-01--baseline--write-commit-msg--r1</a></td><td>baseline</td><td>write-commit-msg</td><td><span class="badge b-ok">ok</span></td><td><span class="badge b-ok">passed</span></td><td><span class="num-cell">—</span></td><td>2026-11-18T14:06:28</td></tr></tbody></table><p class="muted"><a href="experiments.html">All 38 runs →</a></p></div><script>
+function sortTable(th){
+  const t=th.closest('table'),tb=t.tBodies[0],idx=th.cellIndex;
+  const asc=!th.classList.contains('sorted-asc');
+  t.querySelectorAll('th').forEach(h=>h.classList.remove('sorted-asc','sorted-desc'));
+  th.classList.add(asc?'sorted-asc':'sorted-desc');
+  [...tb.rows].sort((a,b)=>{
+    const x=a.cells[idx]?.dataset.v??a.cells[idx]?.innerText??'';
+    const y=b.cells[idx]?.dataset.v??b.cells[idx]?.innerText??'';
+    const nx=parseFloat(x),ny=parseFloat(y);
+    if(!isNaN(nx)&&!isNaN(ny))return asc?nx-ny:ny-nx;
+    return asc?String(x).localeCompare(y):String(y).localeCompare(x);
+  }).forEach(r=>tb.appendChild(r));
+}
+document.querySelectorAll('table.sortable th').forEach(th=>
+  th.addEventListener('click',()=>sortTable(th)));
+document.querySelectorAll('input.filter').forEach(inp=>{
+  const sel=inp.dataset.target;inp.addEventListener('input',()=>{
+    const q=inp.value.toLowerCase();
+    document.querySelectorAll(sel+' [data-frow]').forEach(r=>{
+      r.style.display=r.innerText.toLowerCase().includes(q)?'':'none';
+    });
+  });
+});
+</script>

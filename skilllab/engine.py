@@ -10,6 +10,7 @@ Two injection modes (see SPEC §4.2):
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -72,12 +73,19 @@ _MAX_TOOL_OUTPUT = 8000
 
 
 def run_in_workspace(lab: Lab, ws: Path, command: str,
-                     timeout: int = _CMD_TIMEOUT) -> subprocess.CompletedProcess:
-    """Run a shell command in a workspace — bwrap-isolated when configured.
+                     timeout: int | None = None,
+                     stdin_text: str | None = None
+                     ) -> subprocess.CompletedProcess:
+    """Run a shell command under the lab's execution policy.
 
-    sandbox: bwrap  →  no network, read-only system, rw workspace only.
+    sandbox: bwrap  →  isolated: no network, read-only system, rw workspace.
+    sandbox: unsafe →  unrestricted shell in the workspace (explicit opt-in,
+                       cwd alone is NOT a security boundary).
+    unset/other   →  disabled: fail closed, never silently run unrestricted.
     """
-    if lab.cfg.get("sandbox") == "bwrap":
+    timeout = timeout or int(lab.cfg.get("command_timeout", _CMD_TIMEOUT))
+    mode = lab.cfg.get("sandbox")
+    if mode == "bwrap":
         if not shutil.which("bwrap"):
             raise LabError("sandbox=bwrap configured but bwrap not on PATH")
         return subprocess.run(
@@ -88,9 +96,15 @@ def run_in_workspace(lab: Lab, ws: Path, command: str,
              "--tmpfs", "/tmp", "--tmpfs", "/ws",
              "--bind", str(ws), "/ws", "--chdir", "/ws",
              "--", "bash", "-lc", command],
-            capture_output=True, text=True, timeout=timeout)
-    return subprocess.run(command, shell=True, cwd=ws, capture_output=True,
-                          text=True, timeout=timeout)
+            input=stdin_text, capture_output=True, text=True,
+            timeout=timeout)
+    if mode == "unsafe":
+        return subprocess.run(command, shell=True, cwd=ws, input=stdin_text,
+                              capture_output=True, text=True, timeout=timeout)
+    raise LabError(
+        f"command execution disabled (sandbox={mode!r}) — set "
+        "'sandbox: bwrap' for isolated execution or 'sandbox: unsafe' to "
+        "explicitly allow unrestricted shell commands")
 
 
 class _ToolEnv:
@@ -228,7 +242,8 @@ def _seed_for(policy: str, *parts: str) -> int:
 
 
 def run_rollout(lab: Lab, exp: Experiment, arm: Arm, task_id: str,
-                idx: int, batch: str | None = None) -> RunRecord:
+                idx: int, batch: str | None = None,
+                overwrite: bool = False) -> RunRecord:
     task = lab.task(task_id)
     task_dir = lab.task_dir(task_id)
     run_id = f"{exp.id}--{arm.name}--{task_id}--r{idx}"
@@ -237,7 +252,16 @@ def run_rollout(lab: Lab, exp: Experiment, arm: Arm, task_id: str,
     run_dir = lab.runs_dir / run_id
     ws = run_dir / "workspace"
     if run_dir.exists():
-        shutil.rmtree(run_dir)
+        if not overwrite:
+            raise LabError(
+                f"run '{run_id}' already exists — run history is "
+                "append-only (use `lab rerun --batch` for new history or "
+                "--force to archive and overwrite)")
+        # auditable overwrite: move the old run to archive/, never delete
+        dest = (lab.archive_dir / run_id
+                / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S"))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(run_dir), str(dest))
     ws.mkdir(parents=True)
 
     for fx in task.fixtures:
@@ -269,7 +293,11 @@ def run_rollout(lab: Lab, exp: Experiment, arm: Arm, task_id: str,
         seed if not client_is_mock(model_name) else None,
         timeout=float(lab.cfg.get("llm_timeout", 120)),
         max_retries=int(lab.cfg.get("llm_retries", 3)),
-        cwd=str(ws))
+        cwd=str(ws),
+        # external `cmd:` drivers run under the SAME sandbox policy —
+        # they cannot bypass the configured execution security
+        cmd_runner=lambda c, t, i: run_in_workspace(
+            lab, ws, c, timeout=t, stdin_text=i))
     env = _ToolEnv(lab, ws, offered)
     messages: list[dict] = [
         {"role": "system", "content": system},
@@ -330,8 +358,8 @@ def client_is_mock(model: str) -> bool:
 
 
 def run_experiment(lab: Lab, exp_id: str, only_arm: str | None = None,
-                   limit: int | None = None,
-                   batch: str | None = None) -> list[RunRecord]:
+                   limit: int | None = None, batch: str | None = None,
+                   overwrite: bool = False) -> list[RunRecord]:
     exp = lab.experiment(exp_id)
     records: list[RunRecord] = []
     for arm in exp.arms:
@@ -342,7 +370,8 @@ def run_experiment(lab: Lab, exp_id: str, only_arm: str | None = None,
             if limit:
                 n = min(n, limit)
             for i in range(n):
-                records.append(run_rollout(lab, exp, arm, task_id, i, batch))
+                records.append(run_rollout(lab, exp, arm, task_id, i, batch,
+                                           overwrite=overwrite))
     return records
 
 
@@ -366,15 +395,23 @@ def planned_run_ids(exp: Experiment, arm_filter: str | None = None,
     return ids
 
 
+_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
 def validate_experiment(lab: Lab, exp: Experiment) -> tuple[list[str],
                                                           list[str]]:
     """Pre-flight checks before running. Returns (errors, warnings).
 
     Enforces the one-independent-variable rule: arms may only differ on the
-    dimension declared by `independent_var`.
+    dimension declared by `independent_var`. All referenced tasks, skills,
+    variants, rubrics and fixtures must resolve before any run dir or LLM
+    call happens.
     """
     errors: list[str] = []
     warnings: list[str] = []
+    if not _ID_RE.fullmatch(exp.id):
+        errors.append(f"invalid experiment id {exp.id!r} "
+                      "(allowed: [A-Za-z0-9._-])")
     if exp.independent_var == "harness":
         errors.append("independent_var=harness is not supported — only "
                       "harness 'standard-tools-v1' exists")
@@ -382,18 +419,41 @@ def validate_experiment(lab: Lab, exp: Experiment) -> tuple[list[str],
         errors.append("rollouts_per_arm must be >= 1")
     if not exp.tasks:
         errors.append("no tasks listed")
-    for tid in dict.fromkeys(exp.tasks):
-        try:
-            lab.task(tid)
-        except LabError as e:
-            errors.append(str(e))
+    elif len(set(exp.tasks)) != len(exp.tasks):
+        errors.append("duplicate task ids in experiment")
+    if not str(exp.fixed.model or "").strip():
+        errors.append("fixed.model is empty")
+    if not 0.0 <= exp.fixed.temperature <= 2.0:
+        errors.append(f"temperature must be in [0, 2] "
+                      f"(got {exp.fixed.temperature})")
+    if not exp.hypothesis.strip():
+        warnings.append("empty hypothesis — a falsifiable claim keeps the "
+                        "experiment honest")
     for a in exp.arms:
+        if not _ID_RE.fullmatch(a.name):
+            errors.append(f"invalid arm name {a.name!r} "
+                          "(allowed: [A-Za-z0-9._-])")
         if a.skill:
             sid, vid = parse_skill_ref(a.skill)
             try:
                 lab.variant_dir(sid, vid)
             except LabError as e:
                 errors.append(f"arm '{a.name}': {e}")
+    for tid in dict.fromkeys(exp.tasks):
+        try:
+            t = lab.task(tid)
+        except LabError as e:
+            errors.append(str(e))
+            continue
+        if t.rubric:
+            try:
+                lab.rubric(t.rubric)
+            except LabError as e:
+                errors.append(f"task '{tid}': {e}")
+        tdir = lab.task_dir(tid)
+        for fx in t.fixtures:
+            if not (tdir / fx).exists():
+                errors.append(f"task '{tid}': missing fixture '{fx}'")
     dims = {
         "skill_variant": {a.skill for a in exp.arms},
         "model": {a.model or exp.fixed.model for a in exp.arms},

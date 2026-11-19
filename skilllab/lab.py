@@ -12,7 +12,8 @@ DEFAULT_CONFIG = {
     "temperature": 0.0,
     "rollouts_per_arm": 5,
     "max_turns": 15,
-    "sandbox": None,           # "bwrap" for isolated run_command
+    "sandbox": None,           # "bwrap" | "unsafe" | unset = commands disabled
+    "command_timeout": 60,     # seconds per run_command / check command
     "llm_timeout": 120,        # seconds per LLM call (rollout + judge)
     "llm_retries": 3,          # retries on transient API errors
     "analysis": {
@@ -23,9 +24,17 @@ DEFAULT_CONFIG = {
         "description_max_chars": 600,
         "trigger_conflict_threshold": 0.6,
     },
+    "regression": {           # thresholds for `lab regression`
+        "score_drop": 0.10,       # absolute rubric-score decrease
+        "token_increase": 0.25,   # relative token growth flag
+        "latency_increase": 0.25,
+        "variance_increase": 0.10,
+        "min_runs": 3,            # per arm+task before verdicts apply
+    },
 }
 
-DIRS = ["skills", "tasks", "rubrics", "experiments", "runs", "insights", "principles"]
+DIRS = ["skills", "tasks", "rubrics", "experiments", "runs", "insights",
+        "principles", "regressions", "suites"]
 
 
 class LabError(Exception):
@@ -53,9 +62,15 @@ class Lab:
     @property
     def runs_dir(self) -> Path: return self.d("runs")
     @property
+    def archive_dir(self) -> Path: return self.d("archive")
+    @property
     def insights_dir(self) -> Path: return self.d("insights")
     @property
     def principles_dir(self) -> Path: return self.d("principles")
+    @property
+    def regressions_dir(self) -> Path: return self.d("regressions")
+    @property
+    def suites_dir(self) -> Path: return self.d("suites")
 
     # -- discovery ---------------------------------------------------------
 
@@ -79,7 +94,9 @@ class Lab:
             "max_turns: 15\n"
             "llm_timeout: 120      # seconds per LLM call\n"
             "llm_retries: 3        # retries on transient API errors\n"
-            "# sandbox: bwrap       # isolate run_command: no network, ro system\n"
+            "# sandbox: bwrap       # isolated run_command (recommended)\n"
+            "# sandbox: unsafe      # unrestricted shell — explicit opt-in\n"
+            "# unset sandbox        # commands are DISABLED (fail closed)\n"
         )
         for d in DIRS:
             (root / d).mkdir(exist_ok=True)

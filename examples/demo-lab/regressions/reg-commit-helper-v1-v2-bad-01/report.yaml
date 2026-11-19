@@ -1,0 +1,73 @@
+id: reg-commit-helper-v1-v2-bad-01
+verdict: regressed
+counts:
+  critical: 0
+  quality: 0
+  activation: 1
+  false-activation: 0
+  efficiency: 0
+  stability: 0
+tasks:
+- task: unrelated-refactor
+  kind: activation-negative
+  categories: []
+  improvements: []
+  notes: []
+  baseline:
+    n_runs: 3
+    errors: 0
+    error_rate: 0.0
+    n_final: 3
+    incomplete: 0
+    success: 1.0
+    score: 1.0
+    activated: 0.0
+    tokens: 202
+    latency: 0.0012776666666666668
+    turns: 2
+    variance: 0.0
+  candidate:
+    n_runs: 3
+    errors: 0
+    error_rate: 0.0
+    n_final: 3
+    incomplete: 0
+    success: 1.0
+    score: 1.0
+    activated: 0.0
+    tokens: 174
+    latency: 0.0010696666666666667
+    turns: 2
+    variance: 0.0
+- task: write-commit-msg
+  kind: activation-positive
+  categories:
+  - activation
+  improvements: []
+  notes: []
+  baseline:
+    n_runs: 3
+    errors: 0
+    error_rate: 0.0
+    n_final: 3
+    incomplete: 0
+    success: 1.0
+    score: 1.0
+    activated: 1.0
+    tokens: 211
+    latency: 0.0016256666666666668
+    turns: 4
+    variance: 0.0
+  candidate:
+    n_runs: 3
+    errors: 0
+    error_rate: 0.0
+    n_final: 3
+    incomplete: 0
+    success: 1.0
+    score: 1.0
+    activated: 0.0
+    tokens: 183
+    latency: 0.00111
+    turns: 2
+    variance: 0.0

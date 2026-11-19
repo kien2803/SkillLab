@@ -36,13 +36,17 @@ class LLMReply:
 class LLMClient:
     def __init__(self, model: str, temperature: float = 0.0,
                  seed: Optional[int] = None, timeout: float = 120,
-                 max_retries: int = 3, cwd: Optional[str] = None):
+                 max_retries: int = 3, cwd: Optional[str] = None,
+                 cmd_runner=None):
         self.model = model
         self.temperature = temperature
         self.seed = seed
         self.timeout = timeout
         self.max_retries = max_retries
         self.cwd = cwd
+        # Injected by the engine: runs the driver under the lab's sandbox
+        # policy. None = direct subprocess (standalone/test use only).
+        self.cmd_runner = cmd_runner
         self.is_mock = model == "mock" or model.startswith("mock:")
         self.is_cmd = model.startswith("cmd:")
 
@@ -52,7 +56,7 @@ class LLMClient:
             return _mock_complete(messages, tools or [])
         if self.is_cmd:
             return _cmd_complete(self.model[4:], messages, tools or [],
-                                 self.timeout, self.cwd)
+                                 self.timeout, self.cwd, self.cmd_runner)
         return _litellm_complete(self.model, self.temperature, self.seed,
                                  messages, tools, self.timeout,
                                  self.max_retries)
@@ -71,11 +75,18 @@ class LLMClient:
 # small adapter and point `model:` at it.
 
 def _cmd_complete(cmd: str, messages: list[dict], tools: list[dict],
-                  timeout: float, cwd: Optional[str]) -> LLMReply:
+                  timeout: float, cwd: Optional[str],
+                  cmd_runner=None) -> LLMReply:
     payload = json.dumps({"messages": messages, "tools": tools})
     try:
-        r = subprocess.run(cmd, shell=True, input=payload, cwd=cwd,
-                           capture_output=True, text=True, timeout=timeout)
+        if cmd_runner is not None:
+            # engine-injected runner — honors the lab sandbox policy; a
+            # disabled/unavailable sandbox fails closed here
+            r = cmd_runner(cmd, timeout, payload)
+        else:
+            r = subprocess.run(cmd, shell=True, input=payload, cwd=cwd,
+                               capture_output=True, text=True,
+                               timeout=timeout)
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"driver timed out after {timeout}s") from e
     if r.returncode != 0:

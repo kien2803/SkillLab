@@ -7,11 +7,11 @@
 
 ## Arms
 
-| arm | n | err | activation | false-act | act@turn | rubric | success | tokens | load-cost | turns | variance |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| control | 8 | 0 | 0% | 0% | — | — | 100% | 171.00 | — | 2.00 | — |
-| good-desc | 8 | 0 | 100% | 0% | 1.00 | — | 100% | 206.50 | 120.00 | 3.00 | — |
-| bad-desc | 8 | 0 | 0% | 0% | — | — | 100% | 178.50 | — | 2.00 | — |
+| arm | n | err | incomplete | activation | false-act | act@turn | rubric | success | tokens | load-cost | turns | variance |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| control | 8 | 0 | 0 | 0% | 0% | — | — | 100% | 171.00 | — | 2.00 | — |
+| good-desc | 8 | 0 | 0 | 100% | 0% | 1.00 | — | 100% | 206.50 | 120.00 | 3.00 | — |
+| bad-desc | 8 | 0 | 0 | 0% | 0% | — | — | 100% | 178.50 | — | 2.00 | — |
 
 ## Skill usage
 
@@ -23,6 +23,12 @@
 - `good-desc` vs `control`: activation +100% — trigger wording may matter
 
 Record with: `lab insight new "<statement>" --evidence exp-trigger-wording`
+
+## Warnings
+
+- arm `control` has 8 run(s) but no rubric scores — outcome data insufficient (missing rubric or all runs errored)
+- arm `good-desc` has 8 run(s) but no rubric scores — outcome data insufficient (missing rubric or all runs errored)
+- arm `bad-desc` has 8 run(s) but no rubric scores — outcome data insufficient (missing rubric or all runs errored)
 
 ## Runs
 

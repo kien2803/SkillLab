@@ -114,7 +114,21 @@ deterministic_checks:
     command: "pytest tests/"
   - type: file-exists
     path: "src/auth/handler.py"
+  - type: file-content                 # nội dung file
+    path: "OUTPUT.md"
+    contains: "migrate"                # hoặc regex: /equals:
+  - type: json                         # JSON hợp lệ + keys/field
+    path: "result.json"
+    keys: [status]
+    field: "status.code"
+    value: "0"
+  - type: script                       # chạy script trong workspace
+    path: "scripts/verify.sh"
 ```
+
+Check types: `file-exists`, `file-content` (contains/regex/equals),
+`json` (keys/field/value), `command` (exit status), `script` (test suite
+hoặc custom check chạy qua `bash <path>` — cũng qua sandbox policy).
 
 Hai loại task phục vụ hai câu hỏi khác nhau:
 
@@ -200,6 +214,14 @@ criteria:
 
 Ưu tiên deterministic checks khi có thể; LLM-judge cho tiêu chí mềm;
 human slot dành cho chấm tay khi cần (judgment call).
+
+**Evaluation lifecycle** (eval.yaml): mỗi check và eval tổng có `status` ∈
+`pending | passed | failed | error`. `error` = hạ tầng chấm hỏng (judge
+outage, check config sai, check path escape workspace) — không bao giờ
+trộn với task failure. Eval có criterion pending/error thì eval tổng
+không thể `passed`. Provenance: `evaluated_at` timestamp + `judge_model`
+trên từng judge check; `lab eval <run> --score crit=val
+--comment crit=text` điền human scores (comment criterion-level).
 
 ### 2.6 Insight
 
@@ -449,15 +471,44 @@ Chạy được ngay trên skill file, dùng cho Flow B và pre-experiment check
   theo keyword overlap, viết OUTPUT.md, đọc resources) — đủ để chạy toàn
   pipeline offline và test CI.
 - **UI**: `lab ui` sinh static HTML dashboard trong `ui/` — không cần
-  server/deps, vẫn giữ file-based core là source of truth.
+  server/deps, vẫn giữ file-based core là source of truth. Sáu trang:
+  Overview (stats, regression alerts, recent runs), Skills, Benchmarks
+  (variant/model/task + arm×task matrix), Regressions (theo category),
+  Experiments (config, arm metrics, run history), Knowledge Base
+  (insight/principle + evidence). Per-run pages có eval checks, skill
+  events, artifacts, transcript lọc được. Tất cả số liệu đọc từ
+  run.yaml/eval.yaml/regression records — không fabricate; mock data
+  được gán nhãn simulated.
 - **Sharing**: `lab export`/`lab import` với pack = thư mục + `pack.yaml`
-  manifest (`kind: skilllab-pack`) — insights, principles, tasks.
+  manifest (`kind: skilllab-pack`, `version: 1`) — insights, principles,
+  tasks. Import validate manifest: chỉ 3 thư mục trên được phép, entry
+  traversal bị từ chối, symlink không được copy, task.yaml sai schema bị
+  reject; dest resolve phải nằm trong lab. Output báo
+  imported/skipped/rejected rõ ràng.
 - **Multi-model**: `By model` section trong report tự xuất hiện khi runs
   span >1 model (via `rerun --model` hoặc arm-level `model:`).
-- **Sandbox**: `sandbox: bwrap` trong lab.yaml cô lập `run_command` —
-  unshare-all (không network), system read-only, chỉ workspace writable.
-  Áp dụng cho cả tool của agent lẫn deterministic checks (shared helper
-  `run_in_workspace`).
+- **Sandbox**: `sandbox:` trong lab.yaml quyết định execution policy cho
+  `run_command`, deterministic command checks VÀ `cmd:` drivers (shared
+  helper `run_in_workspace`, `command_timeout` giây/timeout):
+  - `bwrap` — cô lập: unshare-all (không network), system read-only, chỉ
+    workspace writable; thiếu bwrap → lỗi rõ ràng.
+  - `unsafe` — shell không giới hạn trong workspace (opt-in tường minh;
+    `cwd=` KHÔNG phải security boundary).
+  - unset/khác — **commands disabled, fail closed**; không silent fallback.
+- **Run history append-only**: `run_rollout` từ chối run_id đã tồn tại;
+  `--force` không xóa mà move run cũ sang `archive/<run_id>/<ts>/`.
+- **Regression testing**: `lab regression run <skill> --baseline V
+  --candidate V --tasks SUITE` tạo experiment 2-arm (cùng fixed config →
+  equivalence theo construction) rồi so sánh từng task. Record ở
+  `regressions/reg-<skill>-<b>-<c>-<NN>/` (regression.yaml + report.md +
+  report.yaml). Categories: critical (passed→failed), quality (score
+  giảm), activation (mất trigger trên positive task), false-activation
+  (trigger trên negative task), efficiency (token/latency tăng),
+  stability (variance tăng) — threshold trong `lab.yaml` `regression:`,
+  override bằng `--threshold k=v`. `min_runs` đánh dấu insufficient
+  data; eval thiếu/pending/error KHÔNG tính là fail; report có banner
+  cảnh báo khi model=mock. `lab regression list`, `lab regression report
+  <id>` tái tạo report từ run data đã lưu.
 - **Diff viewer**: `lab diff <runA> <runB>` — unified diff của transcript
   flow + workspace outputs; `lab transcript` xem một run.
 - **Lifecycle**: `experiment conclude --conclusion ... --insight <id>`
