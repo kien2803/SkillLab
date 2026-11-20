@@ -384,3 +384,30 @@ def dr_get(pid: str, rid: str, l: Lab = Depends(lab)):
     if rep.is_file():
         st["report_md"] = rep.read_text()
     return st
+
+
+@app.post("/api/v1/experiments/{eid}/run", dependencies=[Depends(auth)])
+def run_exp(eid: str, l: Lab = Depends(lab)):
+    from skilllab.engine import run_experiment
+    try:
+        recs = run_experiment(l, eid)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"runs": [r.run_id for r in recs],
+            "count": len(recs),
+            "note": "synchronous — fine for mock; real models need "
+                    "the worker queue"}
+
+
+@app.get("/api/v1/runs")
+def runs(l: Lab = Depends(lab)):
+    from skilllab.models import RunRecord, load_yaml
+    d = l.runs_dir
+    if not d.is_dir():
+        return []
+    out = []
+    for rd in sorted(d.iterdir()):
+        ry = rd / "run.yaml"
+        if ry.is_file():
+            out.append(RunRecord(**load_yaml(ry)).model_dump(mode="json"))
+    return out[-100:]

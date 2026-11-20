@@ -16,7 +16,7 @@ const api = (p, opts = {}) =>
 function Nav() {
   const items = [["/", "Overview"], ["/projects", "Research"],
                  ["/explorer", "Web Explorer"], ["/skills", "Skill Studio"],
-                 ["/proposals", "AI Architect"], ["/failures", "Failures"], ["/releases", "Releases"]];
+                 ["/blueprints", "Blueprints"], ["/experiments", "Experiments"], ["/proposals", "AI Architect"], ["/failures", "Failures"], ["/releases", "Releases"]];
   const [tk, setTk] = useState(tok());
   return (
     <nav style={{ display: "flex", gap: 16, borderBottom: "1px solid #333",
@@ -194,6 +194,62 @@ function Releases() {
       </div>))}</Page>;
 }
 
+function Experiments() {
+  const [list, setList] = useState([]);
+  const [msg, setMsg] = useState("");
+  const [runs, setRuns] = useState([]);
+  const load = () => {
+    api("/experiments").then(setList).catch(() => {});
+    api("/runs").then(setRuns).catch(() => {});
+  };
+  useEffect(load, []);
+  const run = (id) =>
+    api(`/experiments/${id}/run`, { method: "POST" })
+      .then((r) => { setMsg(`${id}: ${r.count} runs`); load(); })
+      .catch((e) => setMsg(String(e)));
+  return <Page><h2>Experiment Lab</h2>
+    {msg && <p style={{ color: "#8f8" }}>{msg}</p>}
+    {list.map((e) => <div key={e.id} style={card}>
+      <b>{e.id}</b> [{e.status}] {e.title}
+      <div style={{ fontSize: 12, color: "#888" }}>
+        arms: {e.arms.map((a) => a.name + "=" + (a.skill || "none")).join(", ")}
+        · tasks: {e.tasks.join(", ") || "—"}
+        · rollouts: {e.rollouts_per_arm}
+        · model: {e.fixed ? e.fixed.model : "?"}</div>
+      <button onClick={() => run(e.id)}>Run</button></div>)}
+    <h3>Recent runs</h3>
+    {runs.slice(-10).reverse().map((r) => (
+      <div key={r.run_id} style={{ fontSize: 12 }}>
+        <code>{r.run_id}</code> [{r.status}] {r.skill_ref}</div>))}
+  </Page>;
+}
+
+function Blueprints() {
+  const [projects, setProjects] = useState([]);
+  const [sel, setSel] = useState(null);
+  useEffect(() => { api("/projects").then(setProjects).catch(() => {}); }, []);
+  const pick = (pid) =>
+    api(`/projects/${pid}/blueprints`).then(setSel).catch(() => setSel([]));
+  return <Page><h2>Blueprints</h2>
+    {projects.map((p) => (
+      <button key={p.id} onClick={() => pick(p.id)}
+        style={{ marginRight: 8 }}>{p.id}</button>))}
+    {sel && sel.map((b) => <div key={b.id} style={card}>
+      <b>{b.id}</b> [{b.status}] rev {b.rev} — {b.title}
+      <div style={{ fontSize: 12, color: "#888" }}>
+        generated: {(b.generated_variants || []).join(", ") || "—"}</div>
+      <b>Fields</b>
+      <ul style={{ fontSize: 12 }}>
+        {Object.entries(b.fields || {}).filter(([, v]) =>
+          v && (Array.isArray(v) ? v.length : true))
+          .map(([k, v]) => <li key={k}><b>{k}</b>: {String(v).slice(0, 90)}
+            </li>)}
+      </ul></div>)}
+    {sel && sel.length === 0 && <p style={{ color: "#888" }}>
+      no blueprints in this project</p>}
+  </Page>;
+}
+
 const card = { border: "1px solid #333", borderRadius: 6, padding: 12,
                margin: "8px 0", background: "#16181d" };
 const Page = ({ children }) => (
@@ -206,6 +262,8 @@ export default function App() {
     <Route path="/projects" element={<Projects />} />
     <Route path="/explorer" element={<Explorer />} />
     <Route path="/skills" element={<Skills />} />
+    <Route path="/blueprints" element={<Blueprints />} />
+    <Route path="/experiments" element={<Experiments />} />
     <Route path="/proposals" element={<Proposals />} />
     <Route path="/failures" element={<Failures />} />
     <Route path="/releases" element={<Releases />} />
