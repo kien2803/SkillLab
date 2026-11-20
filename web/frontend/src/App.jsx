@@ -227,9 +227,10 @@ function Experiments() {
 function Blueprints() {
   const [projects, setProjects] = useState([]);
   const [sel, setSel] = useState(null);
+  const [bpPid, setBpPid] = useState("");
   useEffect(() => { api("/projects").then(setProjects).catch(() => {}); }, []);
-  const pick = (pid) =>
-    api(`/projects/${pid}/blueprints`).then(setSel).catch(() => setSel([]));
+  const pick = (pid) => { setBpPid(pid);
+    api(`/projects/${pid}/blueprints`).then(setSel).catch(() => setSel([])); };
   return <Page><h2>Blueprints</h2>
     {projects.map((p) => (
       <button key={p.id} onClick={() => pick(p.id)}
@@ -244,7 +245,8 @@ function Blueprints() {
           v && (Array.isArray(v) ? v.length : true))
           .map(([k, v]) => <li key={k}><b>{k}</b>: {String(v).slice(0, 90)}
             </li>)}
-      </ul></div>)}
+      </ul>
+      <BpEdit pid={bpPid} bid={b.id} reload={() => pick(bpPid)} /></div>)}
     {sel && sel.length === 0 && <p style={{ color: "#888" }}>
       no blueprints in this project</p>}
   </Page>;
@@ -291,6 +293,25 @@ function DeepResearch() {
   </Page>;
 }
 
+function BpEdit({ pid, bid, reload }) {
+  const [k, setK] = useState("");
+  const [v, setV] = useState("");
+  const [msg, setMsg] = useState("");
+  const save = () =>
+    api(`/projects/${pid}/blueprints/${bid}/fields`,
+        { method: "POST", body: JSON.stringify({ fields: { [k]: v } }) })
+      .then(() => { setMsg("saved"); setK(""); setV(""); reload(); })
+      .catch((e) => setMsg(String(e)));
+  return <div style={{ marginTop: 8 }}>
+    <input value={k} onChange={(e) => setK(e.target.value)}
+      placeholder="field" style={{ width: 160 }} />
+    <input value={v} onChange={(e) => setV(e.target.value)}
+      placeholder="value" style={{ width: 300, marginLeft: 6 }} />
+    <button onClick={save} disabled={!k}>Set</button>
+    {msg && <span style={{ color: "#8f8", marginLeft: 8 }}>{msg}</span>}
+  </div>;
+}
+
 const card = { border: "1px solid #333", borderRadius: 6, padding: 12,
                margin: "8px 0", background: "#16181d" };
 const Page = ({ children }) => (
@@ -311,3 +332,4 @@ export default function App() {
     <Route path="/releases" element={<Releases />} />
   </Routes></>);
 }
+// blueprint field editor appended in Blueprints page
