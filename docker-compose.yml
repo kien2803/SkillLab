@@ -1,0 +1,28 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: web/backend/Dockerfile
+    ports: ["8320:8320"]
+    environment:
+      SKILLLAB_DIR: /lab
+      SKILLLAB_TOKEN: ${SKILLLAB_TOKEN:?set SKILLLAB_TOKEN}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+    volumes:
+      - lab-data:/lab
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://localhost:8320/api/v1/health')"]
+      interval: 30s
+      timeout: 5s
+  frontend:
+    image: node:20-alpine
+    working_dir: /frontend
+    command: sh -c "npm install && npm run dev -- --host"
+    ports: ["5173:5173"]
+    volumes:
+      - ./web/frontend:/frontend
+    depends_on: [api]
+volumes:
+  lab-data:
