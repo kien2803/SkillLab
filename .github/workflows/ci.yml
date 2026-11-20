@@ -16,4 +16,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - working-directory: web/frontend
-        run: npm ci && npm run build
+        run: |
+          npm ci && npm run build
+          npx playwright install --with-deps chromium
+          npm run test:e2e

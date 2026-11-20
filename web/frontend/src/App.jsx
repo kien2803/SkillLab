@@ -258,7 +258,7 @@ function Blueprints() {
           .map(([k, v]) => <li key={k}><b>{k}</b>: {String(v).slice(0, 90)}
             </li>)}
       </ul>
-      <BpEdit pid={bpPid} bid={b.id} reload={() => pick(bpPid)} /></div>)}
+      <BpEdit pid={bpPid} bid={b.id} fields={b.fields} reload={() => pick(bpPid)} /></div>)}
     {sel && sel.length === 0 && <p style={{ color: "#888" }}>
       no blueprints in this project</p>}
   </Page>;
@@ -310,32 +310,43 @@ function DeepResearch() {
   </Page>;
 }
 
-function BpEdit({ pid, bid, reload }) {
-  const [k, setK] = useState("");
-  const [v, setV] = useState("");
+function BpEdit({ pid, bid, fields, reload }) {
+  const [vals, setVals] = useState({});
   const [msg, setMsg] = useState("");
+  const LIST = new Set(["target_users","use_cases","in_scope_tasks",
+    "out_of_scope_tasks","trigger_conditions","preconditions",
+    "required_context","execution_workflow","decision_rules",
+    "tool_requirements","resource_requirements","error_handling",
+    "safety_constraints","known_limitations","evaluation_criteria",
+    "compatible_environments"]);
+  const keys = Object.keys(fields || {});
   const save = () =>
     api(`/projects/${pid}/blueprints/${bid}/fields`,
-        { method: "POST", body: JSON.stringify({ fields: { [k]: v } }) })
-      .then(() => { setMsg("saved"); setK(""); setV(""); reload(); })
+        { method: "POST", body: JSON.stringify({ fields: vals }) })
+      .then(() => { setMsg("saved"); setVals({}); reload(); })
       .catch((e) => setMsg(String(e)));
   return <div style={{ marginTop: 8 }}>
-    <input value={k} onChange={(e) => setK(e.target.value)}
-      placeholder="field" style={{ width: 160 }} />
-    <input value={v} onChange={(e) => setV(e.target.value)}
-      placeholder="value" style={{ width: 300, marginLeft: 6 }} />
-    <button onClick={save} disabled={!k}>Set</button>
+    {keys.map((k) => {
+      const isList = LIST.has(k) || Array.isArray(fields[k]);
+      const cur = vals[k] !== undefined ? vals[k]
+        : (isList ? (fields[k] || []).join("\n") : (fields[k] || ""));
+      return <div key={k} style={{ margin: "4px 0" }}>
+        <label style={{ fontSize: 11, color: "#888" }}>{k}</label><br/>
+        {isList
+          ? <textarea rows={3} value={cur} style={{ width: "100%",
+              background: "#0a0c0f", color: "#ddd",
+              border: "1px solid #333" }}
+              onChange={(e) => setVals({ ...vals,
+                [k]: e.target.value.split("\n").filter(Boolean) })} />
+          : <input value={cur} style={{ width: "100%",
+              background: "#0a0c0f", color: "#ddd",
+              border: "1px solid #333" }}
+              onChange={(e) => setVals({ ...vals, [k]: e.target.value })} />}
+      </div>;})}
+    <button onClick={save} disabled={!Object.keys(vals).length}>
+      Save changes</button>
     {msg && <span style={{ color: "#8f8", marginLeft: 8 }}>{msg}</span>}
   </div>;
-}
-
-function AddForm({ ph, onAdd }) {
-  const [v, setV] = useState("");
-  return <div style={{ margin: "6px 0" }}>
-    <input value={v} onChange={(e) => setV(e.target.value)}
-      placeholder={ph} style={{ width: 320, background: "#16181d",
-        color: "#ddd", border: "1px solid #333", padding: "4px 8px" }} />
-    <button onClick={() => { onAdd(v); setV(""); }}>+</button></div>;
 }
 
 const card = { border: "1px solid #333", borderRadius: 6, padding: 12,
