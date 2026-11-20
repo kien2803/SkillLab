@@ -85,8 +85,78 @@ test("write gates on lifecycle endpoints", async ({ page }) => {
                                    variant: "v" }],
     ["post", "/api/v1/releases/s/1/status", { status: "released" }],
     ["post", "/api/v1/insights/x/confirm", {}],
+    ["post", "/api/v1/projects/p/status", { status: "active" }],
+    ["post", "/api/v1/projects/p/questions/q/status",
+     { status: "answered" }],
+    ["post", "/api/v1/projects/p/decisions", { decision: "d" }],
+    ["post", "/api/v1/projects/p/blueprints", { id: "b" }],
+    ["post", "/api/v1/skills", { id: "s" }],
+    ["post", "/api/v1/skills/import", { src: "/tmp/x" }],
+    ["post", "/api/v1/experiments", { id: "e" }],
+    ["post", "/api/v1/experiments/e/rerun", {}],
+    ["post", "/api/v1/experiments/e/conclude", { conclusion: "c" }],
+    ["post", "/api/v1/failures/r/candidate", { variant: "v" }],
+    ["post", "/api/v1/proposals/p/reject", {}],
+    ["post", "/api/v1/export", { name: "p" }],
+    ["post", "/api/v1/import", { src: "/tmp/x" }],
   ]) {
     const r = await page.request[method](url, { data });
     expect(r.status()).toBe(401);
   }
+});
+
+test("project detail exposes all entity kinds", async ({ page }) => {
+  const r = await page.request.get(
+    "/api/v1/projects/commit-helper-research");
+  const j = await r.json();
+  for (const k of ["meta", "questions", "findings", "sources",
+                   "decisions", "notes"])
+    expect(j).toHaveProperty(k);
+});
+
+test("blueprint validate + revisions endpoints", async ({ page }) => {
+  const v = await page.request.get(
+    "/api/v1/projects/commit-helper-research/blueprints/" +
+    "commit-helper-v2/validate");
+  expect(v.ok()).toBeTruthy();
+  const r = await page.request.get(
+    "/api/v1/projects/commit-helper-research/blueprints/" +
+    "commit-helper-v2/revisions");
+  const revs = await r.json();
+  expect(revs.length).toBeGreaterThan(5);
+  expect(revs.at(-1).rev).toBeGreaterThan(5);
+});
+
+test("lab status + tasks + graduation + validate endpoints",
+     async ({ page }) => {
+  const st = await (await page.request.get("/api/v1/status")).json();
+  expect(st.model).toBe("mock");
+  expect(st.runs).toBeGreaterThan(40);
+  const tasks = await (await page.request.get("/api/v1/tasks")).json();
+  expect(tasks.length).toBeGreaterThan(2);
+  const g = await (await page.request.get(
+    "/api/v1/skills/commit-helper/graduation")).json();
+  expect(g.skill_id).toBe("commit-helper");
+  const v = await (await page.request.get(
+    "/api/v1/experiments/exp-trigger-wording/validate")).json();
+  expect(v.valid).toBeTruthy();
+});
+
+test("experiment runs + run diff endpoints", async ({ page }) => {
+  const runs = await (await page.request.get(
+    "/api/v1/experiments/exp-trigger-wording/runs")).json();
+  expect(runs.length).toBeGreaterThan(10);
+  const d = await (await page.request.get(
+    "/api/v1/diff/exp-trigger-wording--control--write-commit-msg--r0" +
+    "/exp-trigger-wording--good-desc--write-commit-msg--r0")).json();
+  expect(d).toHaveProperty("transcript_diff");
+  expect(d).toHaveProperty("added");
+});
+
+test("projects page detail renders entity sections", async ({ page }) => {
+  await page.goto("/projects");
+  await page.getByText("commit-helper-research").first().click();
+  await expect(page.getByText(/Questions \(/)).toBeVisible();
+  await expect(page.getByText(/Sources \(/)).toBeVisible();
+  await expect(page.getByText(/Decisions \(/)).toBeVisible();
 });

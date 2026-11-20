@@ -85,8 +85,29 @@ test("write gates on lifecycle endpoints", async ({ page }) => {
                                    variant: "v" }],
     ["post", "/api/v1/releases/s/1/status", { status: "released" }],
     ["post", "/api/v1/insights/x/confirm", {}],
+    ["post", "/api/v1/projects/p/status", { status: "active" }],
+    ["post", "/api/v1/projects/p/blueprints", { id: "b" }],
+    ["post", "/api/v1/experiments/e/rerun", {}],
+    ["post", "/api/v1/export", { name: "p" }],
   ]) {
     const r = await page.request[method](url, { data });
     expect(r.status()).toBe(401);
   }
+});
+
+test("project detail exposes all entity kinds", async ({ page }) => {
+  const r = await page.request.get(
+    "/api/v1/projects/commit-helper-research");
+  const j = await r.json();
+  for (const k of ["meta", "questions", "findings", "sources",
+                   "decisions", "notes"])
+    expect(j).toHaveProperty(k);
+});
+
+test("projects page detail renders entity sections", async ({ page }) => {
+  await page.goto("/projects");
+  await page.getByText("commit-helper-research").first().click();
+  await expect(page.getByText(/Questions \(/)).toBeVisible();
+  await expect(page.getByText(/Sources \(/)).toBeVisible();
+  await expect(page.getByText(/Decisions \(/)).toBeVisible();
 });

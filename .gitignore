@@ -10,3 +10,6 @@ __pycache__/
 .agents/
 .claude/
 .hallmark/
+
+node_modules
+test-results/

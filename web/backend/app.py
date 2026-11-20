@@ -38,14 +38,18 @@ def projects(l: Lab = Depends(lab)):
 def project(pid: str, l: Lab = Depends(lab)):
     from skilllab import research
     try:
-        p = research.get_project(l, pid)
+        s = research.project_summary(l, pid)
     except LabError as e:
         raise HTTPException(404, str(e))
-    return {"meta": p.model_dump(mode="json"),
-            "questions": [q.model_dump(mode="json")
-                          for q in research.list_questions(l, pid)],
-            "findings": [f.model_dump(mode="json")
-                         for f in research.list_findings(l, pid)]}
+    out = {}
+    for k, v in s.items():
+        if isinstance(v, list):
+            out[k] = [x.model_dump(mode="json")
+                      if hasattr(x, "model_dump") else x for x in v]
+        else:
+            out[k] = v.model_dump(mode="json") \
+                if hasattr(v, "model_dump") else v
+    return out
 
 
 @app.get("/api/v1/skills")
@@ -227,9 +231,15 @@ def check(ref: str, l: Lab = Depends(lab)):
 
 
 @app.post("/api/v1/skills/{ref}/proposals", dependencies=[Depends(auth)])
-def suggest(ref: str, l: Lab = Depends(lab)):
+def suggest(ref: str, l: Lab = Depends(lab), llm: bool = False):
+    """Deterministic patch proposals; ?llm=true asks the lab model for
+    full-file rewrites (refused when model=mock). Same approval gate."""
     from skilllab import architect
-    return [p.model_dump(mode="json") for p in architect.suggest(l, ref)]
+    try:
+        props = architect.suggest(l, ref, use_llm=llm)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return [p.model_dump(mode="json") for p in props]
 
 
 @app.get("/api/v1/proposals")
@@ -387,15 +397,9 @@ def dr_get(pid: str, rid: str, l: Lab = Depends(lab)):
 
 @app.post("/api/v1/experiments/{eid}/run", dependencies=[Depends(auth)])
 def run_exp(eid: str, l: Lab = Depends(lab)):
-    from skilllab.engine import run_experiment
-    try:
-        recs = run_experiment(l, eid)
-    except LabError as e:
-        raise HTTPException(409, str(e))
-    return {"runs": [r.run_id for r in recs],
-            "count": len(recs),
-            "note": "synchronous — fine for mock; real models need "
-                    "the worker queue"}
+    """`lab run` — validates first, evaluates each rollout, refuses
+    concluded experiments and existing run ids."""
+    return _exec_runs(l, eid, None, None, None, None, False)
 
 
 @app.get("/api/v1/runs")
@@ -436,6 +440,10 @@ class StatusIn(BaseModel):
 def finding_status(pid: str, fid: str, body: StatusIn,
                    l: Lab = Depends(lab)):
     from skilllab import research
+    if body.status not in ("candidate", "supported", "refuted",
+                           "inconclusive"):
+        raise HTTPException(400, "status must be candidate|supported|"
+                               "refuted|inconclusive")
     try:
         research.set_finding_status(l, pid, fid, body.status)
     except LabError as e:
@@ -808,6 +816,639 @@ def release_status(skill: str, version: str, body: StatusIn,
     except LabError as e:
         raise HTTPException(409, str(e))
     return {"skill": skill, "version": version, "status": body.status}
+
+
+# ---------------- research lifecycle + entities ----------------
+
+_PROJECT_STATUSES = ("draft", "active", "researching", "designing",
+                     "developing", "experimenting", "validating",
+                     "completed", "archived")
+
+
+@app.post("/api/v1/projects/{pid}/status", dependencies=[Depends(auth)])
+def project_status(pid: str, body: StatusIn, l: Lab = Depends(lab)):
+    from skilllab import research
+    if body.status not in _PROJECT_STATUSES:
+        raise HTTPException(
+            400, f"status must be one of {_PROJECT_STATUSES}")
+    try:
+        research.get_project(l, pid)
+        research.set_status(l, pid, body.status)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return {"id": pid, "status": body.status}
+
+
+class ConfirmIn(BaseModel):
+    confirm: bool = False
+
+
+@app.post("/api/v1/projects/{pid}/delete", dependencies=[Depends(auth)])
+def project_delete(pid: str, body: ConfirmIn, l: Lab = Depends(lab)):
+    """Deletion is only safe for empty drafts — data-bearing projects
+    must be archived instead (archive-over-delete policy)."""
+    from skilllab import research
+    try:
+        research.delete_project(l, pid, confirm=body.confirm)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"id": pid, "deleted": True}
+
+
+_QUESTION_STATUSES = ("open", "investigating", "answered", "deferred")
+
+
+@app.post("/api/v1/projects/{pid}/questions/{qid}/status",
+          dependencies=[Depends(auth)])
+def question_status(pid: str, qid: str, body: StatusIn,
+                    l: Lab = Depends(lab)):
+    from skilllab import research
+    if body.status not in _QUESTION_STATUSES:
+        raise HTTPException(
+            400, f"status must be one of {_QUESTION_STATUSES}")
+    try:
+        research.set_question_status(l, pid, qid, body.status)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return {"id": qid, "status": body.status}
+
+
+class LinkIn(BaseModel):
+    field: str                       # findings | experiments
+    ref: str
+
+
+@app.post("/api/v1/projects/{pid}/questions/{qid}/link",
+          dependencies=[Depends(auth)])
+def question_link(pid: str, qid: str, body: LinkIn,
+                  l: Lab = Depends(lab)):
+    from skilllab import research
+    try:
+        research.link_question(l, pid, qid, body.field, body.ref)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"id": qid, "field": body.field, "ref": body.ref}
+
+
+class SourceIn(BaseModel):
+    type: str = "other"              # url|doc|note|paper|other
+    title: str
+    url: str = ""
+    path: str = ""
+    author: str = ""
+    excerpt: str = ""
+
+
+@app.post("/api/v1/projects/{pid}/sources", dependencies=[Depends(auth)])
+def source_add(pid: str, body: SourceIn, l: Lab = Depends(lab)):
+    from skilllab import research
+    if body.type not in ("url", "doc", "note", "paper", "other"):
+        raise HTTPException(400, "type must be url|doc|note|paper|other")
+    try:
+        s = research.add_source(l, pid, body.type, body.title,
+                                url=body.url, path=body.path,
+                                author=body.author, excerpt=body.excerpt)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return s.model_dump(mode="json")
+
+
+class DecisionIn(BaseModel):
+    decision: str
+    rationale: str = ""
+    alternatives: list[str] = []
+
+
+@app.post("/api/v1/projects/{pid}/decisions", dependencies=[Depends(auth)])
+def decision_add(pid: str, body: DecisionIn, l: Lab = Depends(lab)):
+    from skilllab import research
+    try:
+        d = research.add_decision(l, pid, body.decision, body.rationale,
+                                  body.alternatives)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return d.model_dump(mode="json")
+
+
+_DECISION_STATUSES = ("proposed", "accepted", "rejected", "superseded")
+
+
+@app.post("/api/v1/projects/{pid}/decisions/{did}/status",
+          dependencies=[Depends(auth)])
+def decision_status(pid: str, did: str, body: StatusIn,
+                    l: Lab = Depends(lab)):
+    from skilllab import research
+    if body.status not in _DECISION_STATUSES:
+        raise HTTPException(
+            400, f"status must be one of {_DECISION_STATUSES}")
+    try:
+        research.set_decision_status(l, pid, did, body.status)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return {"id": did, "status": body.status}
+
+
+# ---------------- blueprint lifecycle ----------------
+
+class BpIn(BaseModel):
+    id: str
+    title: str = ""
+
+
+@app.post("/api/v1/projects/{pid}/blueprints",
+          dependencies=[Depends(auth)])
+def bp_new(pid: str, body: BpIn, l: Lab = Depends(lab)):
+    from skilllab import blueprint, research
+    try:
+        research.get_project(l, pid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    try:
+        d = blueprint.new_blueprint(l, pid, body.id, body.title)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"path": str(d)}
+
+
+_BP_STATUSES = ("draft", "designing", "ready_for_generation",
+                "generated", "testing", "improving", "validated",
+                "released", "archived")
+
+
+@app.post("/api/v1/projects/{pid}/blueprints/{bid}/status",
+          dependencies=[Depends(auth)])
+def bp_status(pid: str, bid: str, body: StatusIn, l: Lab = Depends(lab)):
+    """Statuses beyond `designing` are gated on `blueprint validate`
+    (enforced server-side, same as CLI)."""
+    from skilllab import blueprint
+    if body.status not in _BP_STATUSES:
+        raise HTTPException(400, f"status must be one of {_BP_STATUSES}")
+    try:
+        bp = blueprint.set_status(l, pid, bid, body.status)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"id": bid, "status": bp.status, "rev": bp.rev}
+
+
+class FromQIn(BaseModel):
+    qid: str
+
+
+@app.post("/api/v1/projects/{pid}/blueprints/{bid}/from-question",
+          dependencies=[Depends(auth)])
+def bp_from_q(pid: str, bid: str, body: FromQIn, l: Lab = Depends(lab)):
+    from skilllab import blueprint
+    try:
+        bp = blueprint.from_question(l, pid, bid, body.qid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return bp.model_dump(mode="json")
+
+
+class LinkFindingIn(BaseModel):
+    finding: str
+
+
+@app.post("/api/v1/projects/{pid}/blueprints/{bid}/link",
+          dependencies=[Depends(auth)])
+def bp_link(pid: str, bid: str, body: LinkFindingIn,
+            l: Lab = Depends(lab)):
+    from skilllab import blueprint
+    try:
+        blueprint.link_finding(l, pid, bid, body.finding)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return {"id": bid, "linked": body.finding}
+
+
+@app.post("/api/v1/projects/{pid}/blueprints/{bid}/draft",
+          dependencies=[Depends(auth)])
+def bp_draft(pid: str, bid: str, l: Lab = Depends(lab)):
+    """Deterministic prefill of empty fields from project research."""
+    from skilllab import blueprint
+    try:
+        touched = blueprint.draft_from_research(l, pid, bid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return {"id": bid, "touched": touched}
+
+
+@app.get("/api/v1/projects/{pid}/blueprints/{bid}/revisions")
+def bp_revisions(pid: str, bid: str, l: Lab = Depends(lab)):
+    from skilllab import blueprint
+    try:
+        revs = blueprint.revisions(l, pid, bid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return [{"rev": b.rev, "status": b.status, "updated": b.updated,
+             "title": b.title} for b in revs]
+
+
+@app.get("/api/v1/projects/{pid}/blueprints/{bid}/diff")
+def bp_diff(pid: str, bid: str, from_rev: int, to_rev: int | None = None,
+            l: Lab = Depends(lab)):
+    from skilllab import blueprint
+    try:
+        return {"diffs": blueprint.diff_revisions(l, pid, bid, from_rev,
+                                                  to_rev)}
+    except LabError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/v1/projects/{pid}/blueprints/{bid}/drift")
+def bp_drift(pid: str, bid: str, ref: str, l: Lab = Depends(lab)):
+    """On-disk artifact vs fresh emit — synced | drifted + unified diff."""
+    from skilllab import studio
+    try:
+        return studio.artifact_diff(l, pid, bid, ref)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+
+
+class BpExpIn(BaseModel):
+    skill: str
+    variant: str
+    exp_id: str | None = None
+
+
+@app.post("/api/v1/projects/{pid}/blueprints/{bid}/experiment",
+          dependencies=[Depends(auth)])
+def bp_experiment(pid: str, bid: str, body: BpExpIn,
+                  l: Lab = Depends(lab)):
+    """Scaffold task-bank entries + two-arm experiment from scope lists.
+    Draft tasks ship without checks — evals stay incomplete until
+    authored (honest scaffolding, no fabricated evidence)."""
+    from skilllab import blueprint
+    try:
+        exp_id, created, skipped = blueprint.experiment_from_blueprint(
+            l, pid, bid, body.skill, body.variant, body.exp_id)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"experiment": exp_id, "tasks_created": created,
+            "tasks_skipped": skipped}
+
+
+# ---------------- skills: registry ops + studio ----------------
+
+class SkillIn(BaseModel):
+    id: str
+    kind: str = "skill-md"
+
+
+@app.post("/api/v1/skills", dependencies=[Depends(auth)])
+def skill_new(body: SkillIn, l: Lab = Depends(lab)):
+    from skilllab.registry import new_skill
+    try:
+        d = new_skill(l, body.id, body.kind)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"path": str(d)}
+
+
+class ImportIn(BaseModel):
+    src: str                         # local path or git URL[#subdir]
+
+
+@app.post("/api/v1/skills/import", dependencies=[Depends(auth)])
+def skill_import(body: ImportIn, l: Lab = Depends(lab)):
+    from skilllab.registry import add_skill
+    try:
+        d = add_skill(l, body.src)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"path": str(d)}
+
+
+@app.get("/api/v1/skill-scan")
+def skill_scan(l: Lab = Depends(lab)):
+    """Discover skills in well-known agent dirs (no import)."""
+    from skilllab.registry import scan_skill_dirs, skill_entry_file
+    from skilllab.models import parse_frontmatter
+    out = []
+    for d in scan_skill_dirs():
+        entry = skill_entry_file(d)
+        fm = parse_frontmatter(entry.read_text())[0] if entry else {}
+        out.append({"path": str(d), "name": fm.get("name") or d.name})
+    return out
+
+
+@app.post("/api/v1/skills/{ref}/resources", dependencies=[Depends(auth)])
+async def skill_resource(ref: str, file: UploadFile,
+                         l: Lab = Depends(lab)):
+    """Upload a file into the variant's resources/ (progressive
+    disclosure — referenced from SKILL.md on demand)."""
+    import tempfile
+    from skilllab import studio
+    raw = await file.read()
+    if len(raw) > 2_000_000:
+        raise HTTPException(413, "file >2MB")
+    name = Path(file.filename or "resource").name   # strip client dirs
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / name
+        src.write_bytes(raw)
+        try:
+            dest = studio.add_resource(l, ref, str(src))
+        except LabError as e:
+            raise HTTPException(404, str(e))
+    return {"path": str(dest)}
+
+
+@app.get("/api/v1/skills/{sid}/graduation")
+def skill_graduation(sid: str, l: Lab = Depends(lab)):
+    """`lab skill evaluate` — activation/false-activation/delta verdicts."""
+    import dataclasses
+    from skilllab.graduation import evaluate_skill
+    try:
+        rep = evaluate_skill(l, sid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return dataclasses.asdict(rep)
+
+
+# ---------------- experiments: ops ----------------
+
+class ExpIn(BaseModel):
+    id: str
+
+
+@app.post("/api/v1/experiments", dependencies=[Depends(auth)])
+def exp_new(body: ExpIn, l: Lab = Depends(lab)):
+    """Scaffold experiment.yaml (template — fill arms/tasks)."""
+    import datetime
+    from skilllab.cli import EXP_TEMPLATE
+    d = l.experiments_dir / body.id
+    if (d / "experiment.yaml").is_file():
+        raise HTTPException(409, f"experiment '{body.id}' already exists")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "experiment.yaml").write_text(EXP_TEMPLATE.format(
+        eid=body.id, model=l.cfg["model"],
+        n=l.cfg["rollouts_per_arm"],
+        today=datetime.date.today().isoformat()))
+    return {"path": str(d / "experiment.yaml")}
+
+
+@app.get("/api/v1/experiments/{eid}/validate")
+def exp_validate(eid: str, l: Lab = Depends(lab)):
+    from skilllab.engine import validate_experiment
+    try:
+        exp = l.experiment(eid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    errors, warnings = validate_experiment(l, exp)
+    return {"experiment": eid, "valid": not errors,
+            "errors": errors, "warnings": warnings}
+
+
+@app.get("/api/v1/experiments/{eid}/runs")
+def exp_runs(eid: str, l: Lab = Depends(lab)):
+    from skilllab.report import load_runs
+    try:
+        l.experiment(eid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return [{"run": r.model_dump(mode="json"),
+             "eval": e.model_dump(mode="json") if e else None}
+            for r, e in load_runs(l, eid)]
+
+
+def _exec_runs(l: Lab, eid: str, arm: str | None, limit: int | None,
+               batch: str | None, model: str | None,
+               force: bool) -> dict:
+    """Shared run/rerun driver — mirrors `lab run`/`rerun`: validates
+    first, refuses concluded experiments and existing run ids (append-
+    only history), evaluates each completed rollout."""
+    import re
+    from skilllab.engine import (planned_run_ids, run_rollout,
+                                 validate_experiment)
+    from skilllab.evaluate import evaluate_run
+    try:
+        exp = l.experiment(eid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    if exp.status == "concluded":
+        raise HTTPException(409, f"experiment '{eid}' is concluded "
+                               "(immutable) — start a new experiment")
+    errors, warns = validate_experiment(l, exp)
+    if errors:
+        raise HTTPException(409, "experiment invalid: "
+                               + "; ".join(errors))
+    if model and model != exp.fixed.model and not batch:
+        batch = re.sub(r"[^a-z0-9-]+", "-", model.lower())[:40]
+    if model:
+        exp.fixed.model = model          # in-memory only — config kept
+    planned = planned_run_ids(exp, arm, limit, batch)
+    existing = [r for r in planned
+                if (l.runs_dir / r / "run.yaml").is_file()]
+    if existing and not force:
+        raise HTTPException(
+            409, f"{len(existing)}/{len(planned)} planned run(s) exist "
+                 f"(e.g. {existing[0]}) — use batch or force")
+    exp.status = "running"
+    exp.save(l.exp_dir(exp.id))
+    recs = []
+    for a in exp.arms:
+        if arm and a.name != arm:
+            continue
+        for tid in exp.tasks:
+            n = min(limit, exp.rollouts_per_arm) if limit \
+                else exp.rollouts_per_arm
+            for i in range(n):
+                rec = run_rollout(l, exp, a, tid, i, batch,
+                                  overwrite=force)
+                try:
+                    evaluate_run(l, rec, l.task(tid),
+                                 l.runs_dir / rec.run_id)
+                except Exception:
+                    pass                # recorded, doesn't kill batch
+                recs.append(rec.run_id)
+    return {"runs": recs, "count": len(recs), "batch": batch,
+            "warnings": warns,
+            "note": "synchronous — fine for mock; real models need "
+                    "the worker queue"}
+
+
+class RerunIn(BaseModel):
+    arm: str | None = None
+    limit: int | None = None
+    model: str | None = None
+    batch: str | None = None
+    force: bool = False
+
+
+@app.post("/api/v1/experiments/{eid}/rerun", dependencies=[Depends(auth)])
+def exp_rerun(eid: str, body: RerunIn, l: Lab = Depends(lab)):
+    """`lab rerun` — batch suffix keeps history append-only; --model
+    auto-batches for drift probes."""
+    return _exec_runs(l, eid, body.arm, body.limit, body.batch,
+                      body.model, body.force)
+
+
+class ConcludeIn(BaseModel):
+    conclusion: str
+    insights: list[str] = []
+
+
+@app.post("/api/v1/experiments/{eid}/conclude",
+          dependencies=[Depends(auth)])
+def exp_conclude(eid: str, body: ConcludeIn, l: Lab = Depends(lab)):
+    try:
+        exp = l.experiment(eid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    exp.status = "concluded"
+    exp.conclusion = body.conclusion
+    for i in body.insights:
+        if i not in exp.insights_generated:
+            exp.insights_generated.append(i)
+    exp.save(l.exp_dir(exp.id))
+    return {"id": eid, "status": "concluded",
+            "insights": exp.insights_generated}
+
+
+@app.get("/api/v1/diff/{a}/{b}")
+def run_diff(a: str, b: str, l: Lab = Depends(lab)):
+    """`lab diff` — transcript flow + workspace file-set comparison."""
+    import difflib
+    import json
+    dirs = [l.runs_dir / r for r in (a, b)]
+    for d, rid in zip(dirs, (a, b)):
+        if not (d / "run.yaml").is_file():
+            raise HTTPException(404, f"run '{rid}' not found")
+
+    def norm(run_dir: Path) -> list[str]:
+        out = []
+        tp = run_dir / "transcript.jsonl"
+        if tp.is_file():
+            for line in tp.read_text().splitlines():
+                m = json.loads(line)
+                if m.get("role") == "assistant" and m.get("tool_calls"):
+                    for tc in m["tool_calls"]:
+                        out.append(f"assistant→{tc['function']['name']}"
+                                   f" {tc['function']['arguments'][:200]}")
+                else:
+                    nm = f"[{m['name']}] " if m.get("name") else ""
+                    out.append(f"{m.get('role','?')} {nm}"
+                               f"{(m.get('content') or '')[:300]}")
+        return out
+
+    tdiff = list(difflib.unified_diff(norm(dirs[0]), norm(dirs[1]),
+                                      fromfile=a, tofile=b,
+                                      lineterm="", n=2))
+    ws_a, ws_b = (d / "workspace" for d in dirs)
+    files_a = {str(p.relative_to(ws_a))
+               for p in ws_a.rglob("*") if p.is_file()} \
+        if ws_a.is_dir() else set()
+    files_b = {str(p.relative_to(ws_b))
+               for p in ws_b.rglob("*") if p.is_file()} \
+        if ws_b.is_dir() else set()
+    return {"run_a": a, "run_b": b,
+            "transcript_diff": tdiff,
+            "added": sorted(files_b - files_a),
+            "removed": sorted(files_a - files_b)}
+
+
+# ---------------- failures: candidate variants ----------------
+
+class CandidateIn(BaseModel):
+    variant: str
+
+
+@app.post("/api/v1/failures/{run_id}/candidate",
+          dependencies=[Depends(auth)])
+def failure_candidate(run_id: str, body: CandidateIn,
+                      l: Lab = Depends(lab)):
+    """Clone the failed variant into a candidate carrying PROPOSALS.md —
+    the improvement plan travels with the variant."""
+    from skilllab import failure
+    try:
+        dest = failure.candidate(l, run_id, body.variant)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"path": str(dest)}
+
+
+# ---------------- architect: reject + llm flag ----------------
+
+@app.post("/api/v1/proposals/{pid}/reject", dependencies=[Depends(auth)])
+def reject(pid: str, l: Lab = Depends(lab)):
+    from skilllab import architect
+    try:
+        architect.set_status(l, pid, "rejected")
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return {"id": pid, "status": "rejected"}
+
+
+# ---------------- lab status + tasks + export/import ----------------
+
+@app.get("/api/v1/status")
+def lab_status(l: Lab = Depends(lab)):
+    counts = {d: sum(1 for p in l.d(d).rglob("*") if p.is_file()
+                     and p.name != ".gitkeep")
+              for d in ("skills", "tasks", "rubrics", "experiments",
+                        "insights", "principles")}
+    n_runs = sum(1 for d in l.runs_dir.iterdir()
+                 if (d / "run.yaml").is_file()) \
+        if l.runs_dir.is_dir() else 0
+    warns = []
+    for m in l.skills():
+        if not m.variants:
+            warns.append(f"skill '{m.id}' has no variants")
+    for t in l.tasks():
+        for fx in t.fixtures:
+            if not (l.task_dir(t.id) / fx).exists():
+                warns.append(f"task '{t.id}': missing fixture '{fx}'")
+    n_noeval = sum(1 for d in l.runs_dir.iterdir()
+                   if (d / "run.yaml").is_file()
+                   and not (d / "eval.yaml").is_file()) \
+        if l.runs_dir.is_dir() else 0
+    if n_noeval:
+        warns.append(f"{n_noeval} run(s) missing eval.yaml")
+    return {"root": str(l.root), "model": l.cfg["model"],
+            "judge_model": l.cfg["judge_model"],
+            "sandbox": l.cfg.get("sandbox"), "counts": counts,
+            "runs": n_runs, "warnings": warns}
+
+
+@app.get("/api/v1/tasks")
+def tasks(l: Lab = Depends(lab)):
+    return [t.model_dump(mode="json") for t in l.tasks()]
+
+
+class ExportIn(BaseModel):
+    name: str                        # dir name under <lab>/exports/
+    tasks: bool = False
+
+
+@app.post("/api/v1/export", dependencies=[Depends(auth)])
+def export_pack(body: ExportIn, l: Lab = Depends(lab)):
+    import re
+    from skilllab.share import export_pack as do_export
+    name = re.sub(r"[^a-z0-9._-]+", "-", body.name.lower()).strip("-.")
+    if not name:
+        raise HTTPException(400, "invalid pack name")
+    try:
+        out = do_export(l, l.d("exports") / name, body.tasks)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"path": str(out)}
+
+
+class ImportPackIn(BaseModel):
+    src: str                         # server-side pack dir
+    force: bool = False
+
+
+@app.post("/api/v1/import", dependencies=[Depends(auth)])
+def import_pack(body: ImportPackIn, l: Lab = Depends(lab)):
+    """Import a share pack — manifest-validated, traversal-safe
+    (same checks as `lab import`)."""
+    from skilllab.share import import_pack as do_import
+    try:
+        res = do_import(l, Path(body.src), body.force)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return res
 
 
 # ---- production: serve the built SPA from the same port -------------
