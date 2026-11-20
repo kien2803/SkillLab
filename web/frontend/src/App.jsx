@@ -436,6 +436,9 @@ function Skills() {
 }
 
 function TraceView({ t }) {
+  const findings = t.findings || [], questions = t.questions || [],
+        experiments = t.experiments || [], runs = t.runs || [],
+        insights = t.insights || [];
   return <div style={{ fontSize: 12 }}>
     <h3>Trace: {t.skill}@{t.variant}</h3>
     {t.blueprint
@@ -443,20 +446,20 @@ function TraceView({ t }) {
           {" "}r{t.blueprint.rev} (now r{t.blueprint.rev_current})
           {" "}[{t.blueprint.status}] — project: {t.project}</div>
       : <div style={{ color: "#888" }}>no blueprint provenance</div>}
-    {t.findings.length > 0 && <div>findings: {t.findings.map((f) =>
+    {findings.length > 0 && <div>findings: {findings.map((f) =>
       <span key={f.id} style={{ marginRight: 8 }}>
         {f.id}[{f.status}]</span>)}</div>}
-    {t.questions.length > 0 && <div>questions: {t.questions.map((q) =>
+    {questions.length > 0 && <div>questions: {questions.map((q) =>
       <span key={q.id} style={{ marginRight: 8 }}>
         {q.id}[{q.status}]</span>)}</div>}
-    {t.experiments.length > 0 && <div>experiments:
-      {" "}{t.experiments.join(", ")}</div>}
-    {t.runs.length > 0 && <div>runs ({t.runs.length}):
-      {" "}{t.runs.slice(0, 6).map((r) =>
+    {experiments.length > 0 && <div>experiments:
+      {" "}{experiments.join(", ")}</div>}
+    {runs.length > 0 && <div>runs ({runs.length}):
+      {" "}{runs.slice(0, 6).map((r) =>
         <Link key={r} to={"/runs/" + r} style={{ marginRight: 6 }}>
           <code>{r}</code></Link>)}
-      {t.runs.length > 6 && "…"}</div>}
-    {t.insights.length > 0 && <div>insights: {t.insights.map((i) =>
+      {runs.length > 6 && "…"}</div>}
+    {insights.length > 0 && <div>insights: {insights.map((i) =>
       <span key={i.id} style={{ marginRight: 8 }}>
         {i.id}[{i.status}/{i.kind}]</span>)}</div>}
   </div>;
