@@ -284,3 +284,32 @@ def rel_check(skill: str, version: str, l: Lab = Depends(lab)):
         return release.check(l, skill, version)
     except LabError as e:
         raise HTTPException(404, str(e))
+
+
+# ---------------- web explorer ----------------
+
+class SearchIn(BaseModel):
+    query: str
+    limit: int = 10
+
+
+class FetchIn(BaseModel):
+    url: str
+
+
+@app.post("/api/v1/web-search", dependencies=[Depends(auth)])
+def web_search(body: SearchIn, l: Lab = Depends(lab)):
+    from skilllab import webio
+    try:
+        return webio.search(l, body.query, body.limit)
+    except LabError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/v1/web-fetch", dependencies=[Depends(auth)])
+def web_fetch(body: FetchIn):
+    from skilllab import webio
+    try:
+        return webio.fetch(body.url)
+    except LabError as e:
+        raise HTTPException(400, str(e))

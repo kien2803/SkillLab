@@ -1614,3 +1614,25 @@ def test_failure_candidate(lab):
     assert any(v.id == "v2-cand" for v in meta.variants)
     with pytest.raises(LabError):
         failure.candidate(lab, "r-fail", "v2-cand")
+
+
+# ---------- webio: ssrf guard ----------
+
+def test_webio_blocks_private():
+    from skilllab.webio import _check_url, fetch
+    for bad in ["file:///etc/passwd", "gopher://x",
+                "http://127.0.0.1:8080/x", "http://10.0.0.5/",
+                "http://192.168.1.1/", "http://169.254.169.254/meta",
+                "http://172.16.5.5/"]:
+        with pytest.raises(LabError):
+            _check_url(bad)
+    # double-check tuple isn't exhausted on repeated calls
+    for bad in ["http://10.1.2.3/", "http://192.168.0.9/"]:
+        with pytest.raises(LabError):
+            _check_url(bad)
+
+
+def test_webio_search_no_provider(lab):
+    from skilllab.webio import search
+    with pytest.raises(LabError, match="no search provider"):
+        search(lab, "test query")
