@@ -1,7 +1,7 @@
 id: commit-helper-v2
 title: v2 redesign
 status: generated
-rev: 15
+rev: 17
 fields:
   name: commit-helper
   description: Use when the user asks to write or improve a git commit message
@@ -20,14 +20,15 @@ fields:
   execution_workflow:
   - inspect staged diff
   - draft message
-  decision_rules: []
+  decision_rules:
+  - (f01) Removing imperative verbs from description drops activation recall to 0
   tool_requirements: []
   resource_requirements: []
   output_contract: single conventional-commit line + optional body
   error_handling: []
   safety_constraints: []
   known_limitations: []
-  verification_strategy: ''
+  verification_strategy: Re-run the evidence backing findings f01
   evaluation_criteria:
   - conventional format valid
   compatible_environments: []
@@ -35,5 +36,6 @@ related_findings:
 - f01
 generated_variants:
 - commit-helper@v3-bp
+- sys-prompt-test@v1
 created: '2026-11-20'
 updated: '2026-11-20'

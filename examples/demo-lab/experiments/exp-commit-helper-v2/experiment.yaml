@@ -1,0 +1,18 @@
+id: exp-commit-helper-v2
+title: v2 redesign — blueprint scaffold
+hypothesis: agents produce inconsistent commit messages
+independent_var: skill_variant
+fixed:
+  model: mock
+  injection_mode: available
+arms:
+- name: control
+  skill: null
+- name: treatment
+  skill: commit-helper@v3-bp
+tasks:
+- write-a-commit-message-for-stage
+rollouts_per_arm: 3
+status: designed
+conclusion: null
+blueprint: commit-helper-research/commit-helper-v2@r17

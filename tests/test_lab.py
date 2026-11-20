@@ -8,7 +8,7 @@ from skilllab.analyzer import analyze_skill
 from skilllab.cli import main
 from skilllab.engine import run_experiment
 from skilllab.evaluate import evaluate_run
-from skilllab.lab import Lab
+from skilllab.lab import Lab, LabError
 from skilllab.models import Experiment
 from skilllab.report import build_report, load_runs
 
@@ -1408,3 +1408,187 @@ def test_ai_no_actionable_no_proposal(lab):
     props = architect.suggest(lab, "commit-helper@v1")
     # v1 is clean -> nothing proposed (or only already-applied states)
     assert all(p.finding for p in props)
+
+
+
+# ---------- phase 3b: studio tools ----------
+
+def test_preview_tokens_sections(lab):
+    from skilllab.studio import preview
+    info = preview(lab, "commit-helper@v1")
+    assert info["entry"] == "SKILL.md"
+    assert info["tokens"] > 0
+    assert info["fm"]["name"] == "commit-helper"
+    assert info["sections"]
+    assert "resources/style.md" in info["resources"]
+
+
+def test_skill_check_frontmatter(lab):
+    from skilllab.studio import validate_skill
+    issues = validate_skill(lab, "commit-helper@v1")
+    assert isinstance(issues, list)
+    entry = lab.variant_dir("commit-helper", "v1") / "SKILL.md"
+    entry.write_text("---\nname: commit-helper\n---\n\n# T\n\nDo it.\n")
+    issues = validate_skill(lab, "commit-helper@v1")
+    assert any(i["check"] == "frontmatter" and i["severity"] == "error"
+               and "description" in i["message"] for i in issues)
+
+
+def test_skill_check_name_mismatch(lab):
+    from skilllab.studio import validate_skill
+    entry = lab.variant_dir("commit-helper", "v1") / "SKILL.md"
+    text = entry.read_text()
+    entry.write_text(text.replace("name: commit-helper",
+                                  "name: other", 1))
+    issues = validate_skill(lab, "commit-helper@v1")
+    assert any("!= registry id" in i["message"] for i in issues)
+
+
+def test_skill_resource_add(lab, tmp_path):
+    from skilllab.studio import add_resource
+    src = tmp_path / "extra.md"
+    src.write_text("# extra")
+    dest = add_resource(lab, "commit-helper@v1", str(src))
+    assert dest.name == "extra.md"
+    assert dest.parent.name == "resources"
+    with pytest.raises(LabError):
+        add_resource(lab, "commit-helper@v1",
+                     str(tmp_path / "nope.md"))
+
+
+def test_artifact_drift(lab):
+    from skilllab import blueprint as bp
+    from skilllab.studio import generate_skill, artifact_diff
+    main(["project", "new", "proj-1"])
+    bp.new_blueprint(lab, "proj-1", "bp-drift", "T")
+    for k in ("name", "description", "problem_statement",
+              "target_capability", "output_contract"):
+        bp.set_field(lab, "proj-1", "bp-drift", k,
+                     "x" * 50 if k == "description" else "x")
+    for k in ("in_scope_tasks", "trigger_conditions",
+              "execution_workflow", "evaluation_criteria"):
+        bp.set_field(lab, "proj-1", "bp-drift", k, ["a"])
+    bp.set_field(lab, "proj-1", "bp-drift", "name", "drift-skill")
+    generate_skill(lab, "proj-1", "bp-drift", "drift-skill", "v1")
+    d = artifact_diff(lab, "proj-1", "bp-drift", "drift-skill@v1")
+    assert d["status"] == "synced"
+    prev_rev = bp.get_blueprint(lab, "proj-1", "bp-drift").rev
+    bp.set_field(lab, "proj-1", "bp-drift", "output_contract",
+                 "new contract")
+    d = artifact_diff(lab, "proj-1", "bp-drift", "drift-skill@v1")
+    assert d["status"] == "drifted"
+    assert d["gen_rev"] <= prev_rev
+    assert d["bp_rev"] == prev_rev + 1
+    assert "new contract" in d["diff"]
+
+
+def test_studio_cli(lab, capsys):
+    from skilllab import cli
+    assert cli.main(["skill", "preview", "commit-helper@v1"]) == 0
+    out = capsys.readouterr().out
+    assert "tokens" in out and "resources/style.md" in out
+    rc = cli.main(["skill", "check", "commit-helper@v1"])
+    assert rc in (0, 1)
+
+
+# ---------- phase 4b: llm architect + research draft ----------
+
+def test_llm_suggest_mock_rejected(lab):
+    from skilllab.studio import validate_skill  # noqa
+    from skilllab import architect
+    with pytest.raises(LabError):
+        architect.suggest(lab, "commit-helper@v1", use_llm=True)
+
+
+def test_rewrite_patch_apply(lab, tmp_path):
+    from skilllab import architect
+    from skilllab.models import Proposal
+    entry = lab.variant_dir("commit-helper", "v1") / "SKILL.md"
+    new_text = entry.read_text() + "\n## Added section\nstuff\n"
+    p = Proposal(id="prop-999", skill="commit-helper", variant="v1",
+                 finding="llm-review (test)",
+                 patch={"type": "rewrite", "summary": "add section",
+                        "file": "SKILL.md", "content": new_text},
+                 status="approved", created="2025-01-01")
+    from skilllab.release import dump_yaml
+    dump_yaml(p.model_dump(mode="json"),
+              lab.d("proposals") / "prop-999.yaml")
+    architect.apply(lab, "prop-999")
+    assert "Added section" in entry.read_text()
+
+
+def test_draft_from_research(lab):
+    from skilllab import blueprint as bp
+    main(["project", "new", "rp"])
+    main(["question", "add", "rp", "Does X work?"])
+    main(["finding", "add", "rp", "--statement", "finding A"])
+    bp.new_blueprint(lab, "rp", "bp-d", "T")
+    touched = bp.draft_from_research(lab, "rp", "bp-d")
+    got = bp.get_blueprint(lab, "rp", "bp-d")
+    assert "problem_statement" in touched
+    assert "Does X work?" in got.fields["problem_statement"]
+    assert "decision_rules" in touched
+    # second call fills nothing (no overwrite)
+    assert bp.draft_from_research(lab, "rp", "bp-d") == []
+
+
+def test_system_prompt_format(lab):
+    from skilllab import blueprint as bp
+    from skilllab.studio import generate_skill
+    main(["project", "new", "sp-proj"])
+    bp.new_blueprint(lab, "sp-proj", "sp-bp", "T")
+    for k in ("name", "description", "problem_statement",
+              "target_capability", "output_contract"):
+        bp.set_field(lab, "sp-proj", "sp-bp", k,
+                     "x" * 50 if k == "description" else "x")
+    for k in ("in_scope_tasks", "trigger_conditions",
+              "execution_workflow", "evaluation_criteria"):
+        bp.set_field(lab, "sp-proj", "sp-bp", k, ["a"])
+    out = generate_skill(lab, "sp-proj", "sp-bp", "sp-skill", "v1",
+                         fmt="system-prompt")
+    text = out.read_text()
+    assert not text.startswith("---")
+    assert "name:" not in text.splitlines()[0]
+
+
+def test_experiment_from_blueprint(lab):
+    from skilllab import blueprint as bp
+    main(["project", "new", "pe"])
+    bp.new_blueprint(lab, "pe", "bp-e", "T")
+    for k in ("name", "description", "problem_statement",
+              "target_capability", "output_contract"):
+        bp.set_field(lab, "pe", "bp-e", k,
+                     "x" * 50 if k == "description" else "x")
+    for k in ("trigger_conditions", "execution_workflow",
+              "evaluation_criteria"):
+        bp.set_field(lab, "pe", "bp-e", k, ["a"])
+    bp.set_field(lab, "pe", "bp-e", "in_scope_tasks",
+                 ["Write a commit message"])
+    bp.set_field(lab, "pe", "bp-e", "out_of_scope_tasks",
+                 ["Refactor a module"])
+    eid, created, skipped = bp.experiment_from_blueprint(
+        lab, "pe", "bp-e", "commit-helper", "v1")
+    assert eid == "exp-bp-e"
+    assert len(created) == 2 and not skipped
+    exp = lab.experiment(eid)
+    assert exp.arms[0].skill is None
+    assert exp.arms[1].skill == "commit-helper@v1"
+    assert len(exp.tasks) == 2
+    kinds = {lab.task(t).kind for t in exp.tasks}
+    assert kinds == {"activation-positive", "activation-negative"}
+    # rerun: experiment exists → error; tasks reused, not dup
+    with pytest.raises(LabError):
+        bp.experiment_from_blueprint(lab, "pe", "bp-e",
+                                     "commit-helper", "v1")
+
+
+def test_experiment_from_blueprint_cli(lab):
+    from skilllab import blueprint as bp
+    main(["project", "new", "pc"])
+    bp.new_blueprint(lab, "pc", "bp-c", "T")
+    bp.set_field(lab, "pc", "bp-c", "in_scope_tasks", ["Do the thing"])
+    rc = main(["blueprint", "experiment", "pc", "bp-c",
+               "--skill", "commit-helper", "--variant", "v1"])
+    assert rc == 0
+    assert (lab.experiments_dir / "exp-bp-c" /
+            "experiment.yaml").is_file()

@@ -91,6 +91,94 @@ def suggest(lab: Lab, ref: str) -> list[Proposal]:
     return out
 
 
+# ---------- LLM-backed proposer (Phase 4b) ----------
+#
+# Same approval gate as deterministic proposals — the model only writes
+# patch content; nothing is applied without `lab ai approve` + `apply`.
+
+
+def _llm_proposals(lab: Lab, ref: str, findings) -> list[dict]:
+    """Ask the lab's model for rewrite patches. Returns raw patch dicts.
+    Requires a real model or a `cmd:` driver — never called with mock."""
+    from .llm import LLMClient
+    vdir = _variant_dir(lab, ref)
+    entry = _entry(vdir)
+    if not entry:
+        raise LabError(f"no SKILL.md in {vdir}")
+    findings_txt = "\n".join(
+        f"- [{f.severity}] {f.check}: {f.message}" for f in findings) \
+        or "(no analyzer findings)"
+    prompt = (
+        "You are a skill-quality architect. Improve this agent skill file "
+        "based on the analyzer findings. Return ONLY a JSON array — each "
+        "element: {\"summary\": \"one line\", \"file\": \"SKILL.md\", "
+        "\"content\": \"<full rewritten file>\"}. Keep frontmatter "
+        "valid. Do not invent capabilities, evidence or scores.\n\n"
+        f"FINDINGS:\n{findings_txt}\n\nFILE ({entry.name}):\n"
+        + entry.read_text())
+    model = lab.cfg.get("model", "mock")
+    cli = LLMClient(model=model, temperature=0.2)
+    reply = cli.complete([{"role": "user", "content": prompt}])
+    import json as _json
+    txt = (reply.content or "").strip()
+    txt = re.sub(r"^```(json)?|```$", "", txt, flags=re.M).strip()
+    try:
+        items = _json.loads(txt)
+    except _json.JSONDecodeError:
+        raise LabError("model returned non-JSON proposals — "
+                       "inspect with a real model or use deterministic "
+                       "suggest")
+    if not isinstance(items, list):
+        raise LabError("model proposals must be a JSON array")
+    out = []
+    for it in items:
+        if isinstance(it, dict) and it.get("summary") and it.get("content"):
+            out.append({"type": "rewrite", "summary": str(it["summary"]),
+                        "file": it.get("file") or entry.name,
+                        "content": str(it["content"])})
+    return out
+
+
+def suggest(lab: Lab, ref: str, use_llm: bool = False) -> list[Proposal]:
+    """Generate pending proposals from analyzer findings on a variant.
+    With use_llm, proposals are rewrites drafted by the lab's model —
+    same approval gate either way."""
+    sid, vid = parse_skill_ref(ref)
+    vdir = _variant_dir(lab, ref)
+    findings = analyze_skill(lab, sid).get(vid or "", [])
+    if use_llm:
+        if lab.cfg.get("model", "mock").startswith("mock"):
+            raise LabError("--llm needs a real model or `cmd:` driver in "
+                           "lab.yaml (model is mock)")
+        patches = _llm_proposals(lab, ref, findings)
+        out = []
+        for patch in patches:
+            p = Proposal(
+                id=_next_id(lab), skill=sid, variant=vid or "",
+                finding=f"llm-review ({lab.cfg.get('model')})",
+                patch=patch, status="pending",
+                created=date.today().isoformat())
+            p.diff_preview = preview(lab, p)
+            dump_yaml(p.model_dump(mode="json"),
+                      proposals_dir(lab) / f"{p.id}.yaml")
+            out.append(p)
+        return out
+    out = []
+    for f in findings:
+        patch = _patches_for(f, vdir)
+        if not patch:
+            continue
+        p = Proposal(
+            id=_next_id(lab), skill=sid, variant=vid or "",
+            finding=f"{f.check}: {f.message}", patch=patch,
+            status="pending", created=date.today().isoformat())
+        p.diff_preview = preview(lab, p)
+        dump_yaml(p.model_dump(mode="json"),
+                  proposals_dir(lab) / f"{p.id}.yaml")
+        out.append(p)
+    return out
+
+
 def list_proposals(lab: Lab) -> list[Proposal]:
     d = proposals_dir(lab)
     out = []
@@ -149,6 +237,10 @@ def _patched_content(vdir: Path, patch: dict) -> tuple[str, str] | None:
         (vdir / "resources" / "detail.md").write_text(
             "# Detail\n" + tail)
         return old, new
+    elif patch["type"] == "rewrite":
+        if not patch.get("content"):
+            return None
+        return old, patch["content"]
     else:
         return None
     return old, new

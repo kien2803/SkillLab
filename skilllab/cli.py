@@ -1041,7 +1041,8 @@ def cmd_trace(args) -> int:
 
 def cmd_ai_suggest(args) -> int:
     from . import architect
-    props = architect.suggest(_lab(args), args.ref)
+    props = architect.suggest(_lab(args), args.ref,
+                              use_llm=args.llm)
     for p in props:
         print(f"{p.id} [{p.status}] {p.finding}")
         print(f"      → {p.patch['summary']}")
@@ -1086,6 +1087,76 @@ def cmd_ai_apply(args) -> int:
     return 0
 
 
+# ---------- studio ----------
+
+def cmd_skill_preview(args) -> int:
+    from . import studio
+    info = studio.preview(_lab(args), args.ref)
+    print(f"{info['ref']} — {info['entry']} ~{info['tokens']} tokens")
+    print("frontmatter:")
+    for k, v in info["fm"].items():
+        print(f"  {k}: {str(v)[:70]}")
+    print("sections:")
+    for s in info["sections"]:
+        print(f"  {s}")
+    if info["resources"]:
+        print("resources:")
+        for r in info["resources"]:
+            print(f"  {r}")
+    return 0
+
+
+def cmd_skill_check(args) -> int:
+    from . import studio
+    issues = studio.validate_skill(_lab(args), args.ref)
+    for i in issues:
+        print(f"{i['severity']:<5} {i['check']:<24} {i['message']}")
+    if not issues:
+        print("clean")
+    return 1 if any(i["severity"] == "error" for i in issues) else 0
+
+
+def cmd_skill_resource(args) -> int:
+    from . import studio
+    dest = studio.add_resource(_lab(args), args.ref, args.path)
+    print(f"added → {dest}")
+    return 0
+
+
+def cmd_bp_drift(args) -> int:
+    from . import studio
+    d = studio.artifact_diff(_lab(args), args.project, args.id, args.ref)
+    print(f"{d['ref']} — {d['status']} "
+          f"(generated@r{d['gen_rev']}, blueprint now r{d['bp_rev']})")
+    if d["diff"]:
+        print(d["diff"])
+    return 0
+
+
+def cmd_bp_draft(args) -> int:
+    from . import blueprint
+    touched = blueprint.draft_from_research(_lab(args), args.project,
+                                            args.id)
+    if touched:
+        print(f"drafted from research: {', '.join(touched)}")
+    else:
+        print("nothing filled — fields already set or no research "
+              "entities")
+    return 0
+
+
+def cmd_bp_experiment(args) -> int:
+    from . import blueprint
+    eid, created, skipped = blueprint.experiment_from_blueprint(
+        _lab(args), args.project, args.id, args.skill, args.variant)
+    print(f"experiment {eid}")
+    for t in created:
+        print(f"  + task {t} (draft — add checks)")
+    for t in skipped:
+        print(f"  = task {t} (exists, reused)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lab", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1099,6 +1170,9 @@ def build_parser() -> argparse.ArgumentParser:
     x = ss.add_parser("list"); x.set_defaults(f=cmd_skill_list)
     x = ss.add_parser("show"); x.add_argument("id"); x.set_defaults(f=cmd_skill_show)
     x = ss.add_parser("evaluate"); x.add_argument("id"); x.set_defaults(f=cmd_skill_evaluate)
+    x = ss.add_parser("preview"); x.add_argument("ref"); x.set_defaults(f=cmd_skill_preview)
+    x = ss.add_parser("check"); x.add_argument("ref"); x.set_defaults(f=cmd_skill_check)
+    x = ss.add_parser("resource"); x.add_argument("ref"); x.add_argument("path"); x.set_defaults(f=cmd_skill_resource)
 
     s = sub.add_parser("analyze"); s.add_argument("id", nargs="?"); s.set_defaults(f=cmd_analyze)
 
@@ -1187,6 +1261,9 @@ def build_parser() -> argparse.ArgumentParser:
     x = ss.add_parser("revisions"); x.add_argument("project"); x.add_argument("id"); x.set_defaults(f=cmd_bp_revisions)
     x = ss.add_parser("diff"); x.add_argument("project"); x.add_argument("id"); x.add_argument("from_rev", type=int); x.add_argument("--to", dest="to_rev", type=int); x.set_defaults(f=cmd_bp_diff)
     x = ss.add_parser("generate"); x.add_argument("project"); x.add_argument("id"); x.add_argument("--skill", required=True); x.add_argument("--variant", required=True); x.add_argument("--format", default="skill-md"); x.add_argument("--force", action="store_true"); x.set_defaults(f=cmd_bp_generate)
+    x = ss.add_parser("drift"); x.add_argument("project"); x.add_argument("id"); x.add_argument("--ref", required=True); x.set_defaults(f=cmd_bp_drift)
+    x = ss.add_parser("draft"); x.add_argument("project"); x.add_argument("id"); x.set_defaults(f=cmd_bp_draft)
+    x = ss.add_parser("experiment"); x.add_argument("project"); x.add_argument("id"); x.add_argument("--skill", required=True); x.add_argument("--variant", required=True); x.set_defaults(f=cmd_bp_experiment)
 
     s = sub.add_parser("failure"); ss = s.add_subparsers(dest="sub", required=True)
     x = ss.add_parser("analyze"); x.add_argument("run_id"); x.add_argument("--write", action="store_true"); x.set_defaults(f=cmd_failure_analyze)
@@ -1201,7 +1278,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("trace"); s.add_argument("ref"); s.set_defaults(f=cmd_trace)
 
     s = sub.add_parser("ai"); ss = s.add_subparsers(dest="sub", required=True)
-    x = ss.add_parser("suggest"); x.add_argument("ref"); x.set_defaults(f=cmd_ai_suggest)
+    x = ss.add_parser("suggest"); x.add_argument("ref"); x.add_argument("--llm", action="store_true"); x.set_defaults(f=cmd_ai_suggest)
     x = ss.add_parser("list"); x.set_defaults(f=cmd_ai_list)
     x = ss.add_parser("show"); x.add_argument("id"); x.set_defaults(f=cmd_ai_show)
     x = ss.add_parser("approve"); x.add_argument("id"); x.set_defaults(f=cmd_ai_approve)

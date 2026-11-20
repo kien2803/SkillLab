@@ -71,9 +71,19 @@ def emit_skill_md(bp: Blueprint) -> str:
     return out
 
 
+def emit_system_prompt(bp: Blueprint) -> str:
+    """system-prompt target: same content as skill-md minus YAML
+    frontmatter (for runtimes that take a plain system prompt)."""
+    md = emit_skill_md(bp)
+    if md.startswith("---"):
+        md = md.split("---", 2)[2].lstrip("\n")
+    return md
+
+
 FORMATS = {
     "skill-md": emit_skill_md,
-    # future targets (e.g. "claude-skill", "system-prompt") register here
+    "system-prompt": emit_system_prompt,
+    # new targets register here
 }
 
 
@@ -136,3 +146,103 @@ def generate_skill(lab: Lab, pid: str, bid: str, skill_id: str,
         bp.status = "generated"
     _save(lab, pid, bp)
     return vdir / "SKILL.md"
+
+
+# ---------- studio tools: preview / validate / resources / sync -------
+
+from .models import est_tokens, parse_frontmatter, parse_skill_ref
+
+
+def skill_entry(vdir: Path) -> Path | None:
+    for n in ("SKILL.md", "skill.md"):
+        p = vdir / n
+        if p.is_file():
+            return p
+    return None
+
+
+def preview(lab: Lab, ref: str) -> dict:
+    """Structure + token estimate for a variant (offline, no render)."""
+    sid, vid = parse_skill_ref(ref)
+    vdir = lab.variant_dir(sid, vid)
+    entry = skill_entry(vdir)
+    if not entry:
+        raise LabError(f"no SKILL.md in {vdir}")
+    text = entry.read_text()
+    fm, body = parse_frontmatter(text)
+    sections = [m.group(1).strip() for m in
+                __import__("re").finditer(r"^#{1,3}\s+(.+)$", body,
+                                          __import__("re").M)]
+    resources = [str(p.relative_to(vdir)) for p in sorted(vdir.rglob("*"))
+                 if p.is_file() and p != entry]
+    return {
+        "ref": ref, "entry": str(entry.relative_to(vdir)),
+        "tokens": est_tokens(text), "fm": fm, "sections": sections,
+        "resources": resources,
+    }
+
+
+def validate_skill(lab: Lab, ref: str) -> list[dict]:
+    """Studio-level validation: analyzer findings + frontmatter schema."""
+    from .analyzer import analyze_skill
+    sid, vid = parse_skill_ref(ref)
+    out = []
+    info = preview(lab, ref)
+    fm = info["fm"]
+    for k in ("name", "description"):
+        if not fm.get(k):
+            out.append({"severity": "error", "check": "frontmatter",
+                        "message": f"missing required '{k}' in "
+                                   "frontmatter"})
+    if fm.get("name") and fm["name"] != sid:
+        out.append({"severity": "warn", "check": "frontmatter",
+                    "message": f"frontmatter name '{fm['name']}' != "
+                               f"registry id '{sid}'"})
+    for f in analyze_skill(lab, sid).get(vid or "", []):
+        out.append({"severity": f.severity, "check": f.check,
+                    "message": f.message})
+    return out
+
+
+def add_resource(lab: Lab, ref: str, src_path: str) -> Path:
+    """Copy a file into the variant's resources/ and report link status."""
+    src = Path(src_path)
+    if not src.is_file():
+        raise LabError(f"resource '{src_path}' not found")
+    sid, vid = parse_skill_ref(ref)
+    vdir = lab.variant_dir(sid, vid)
+    dest = vdir / "resources" / src.name
+    dest.parent.mkdir(exist_ok=True)
+    shutil.copy2(src, dest)
+    return dest
+
+
+def artifact_diff(lab: Lab, pid: str, bid: str, ref: str) -> dict:
+    """Compare the on-disk artifact against a fresh emit of the current
+    blueprint revision — tells synced / manually-edited / blueprint-moved
+    apart."""
+    bp = get_blueprint(lab, pid, bid)
+    sid, vid = parse_skill_ref(ref)
+    vdir = lab.variant_dir(sid, vid)
+    entry = skill_entry(vdir)
+    if not entry:
+        raise LabError(f"no artifact at {vdir}")
+    fresh = emit_skill_md(bp)
+    current = entry.read_text()
+    import re as _re, difflib
+    # which revision generated this file? parse the provenance comment
+    m = _re.search(r"blueprint \S+ r(\d+)", current)
+    gen_rev = int(m.group(1)) if m else None
+    # ignore the provenance comment itself — generation bumps the
+    # blueprint rev (status/generated_variants), so the file always
+    # trails by one rev even when content is identical
+    strip = lambda t: _re.sub(r"<!-- generated from blueprint.*-->\n?",
+                              "", t)
+    status = "synced" if strip(current) == strip(fresh) else "drifted"
+    diff = "".join(difflib.unified_diff(
+        current.splitlines(True), fresh.splitlines(True),
+        fromfile="on-disk", tofile=f"emit@r{bp.rev}")) \
+        if status == "drifted" else ""
+    return {"ref": ref, "status": status, "gen_rev": gen_rev,
+            "bp_rev": bp.rev, "diff": diff}
+

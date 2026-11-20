@@ -195,13 +195,15 @@ def _empty(msg: str) -> str:
 
 def _nav(active: str, depth: int = 0) -> str:
     pre = "../" * depth
-    items = [("index", "Overview"), ("research", "Research"),
-             ("skills", "Skills"),
-             ("benchmarks", "Benchmarks"), ("regressions", "Regressions"),
-             ("experiments", "Experiments"), ("insights", "Knowledge")]
+    # lifecycle order: research → studio → experiment → knowledge
+    groups = [
+        ("index", "Overview"), ("research", "Research"),
+        ("skills", "Skills"), ("experiments", "Experiments"),
+        ("regressions", "Regressions"), ("benchmarks", "Benchmarks"),
+        ("insights", "Knowledge")]
     links = "".join(
         f'<a href="{pre}{k}.html" class="{"active" if k == active else ""}">'
-        f'{v}</a>' for k, v in items)
+        f'{v}</a>' for k, v in groups)
     return (f'<div class="topbar"><span class="brand">SkillLab</span>'
             f"<nav>{links}</nav></div>")
 

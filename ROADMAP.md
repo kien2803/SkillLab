@@ -97,13 +97,17 @@ product. Work proceeds in independently testable vertical slices.
 
 ## Next slices (priority order)
 
-- **Phase 3b — Skill Studio editor** — preview, token estimate, resource
-  management, blueprint resync; additional `FORMATS` targets.
-- **Phase 4 — AI Skill Architect** — real assistant over `llm.py`:
-  research analysis, blueprint proposals, draft generation, diff
-  proposals + approval workflow. Rules: never fabricate experiments/
-  scores; proposals show diffs; user approves file changes.
-- **Phase 5 — Experiment + failure analysis** — experiment categories
+- **Phase 3b — Skill Studio tools** — DONE: `skill preview` (frontmatter/
+  sections/resources + token estimate), `skill check` (analyzer +
+  frontmatter schema), `skill resource` (copy into `resources/`),
+  `blueprint drift` (on-disk vs fresh emit, provenance-aware).
+  `system-prompt` target added; more FORMATS pluggable.
+- **Phase 4 — AI Skill Architect** — DONE (4a+4b): deterministic
+  proposers + `--llm` rewrite proposals over `llm.py` (mock safely
+  refused), `blueprint draft` research-grounded prefill, unified
+  proposal/approval/apply gate with original-content snapshots.
+  Rules honored: diffs shown, no fabricated evidence, user approves.
+- **Phase 5 — Experiment + failure analysis** — DONE-lite: `blueprint experiment` scaffolds tasks+experiment from scope lists (draft tasks need authored checks); failure analyzer live. Remaining: experiment categories taxonomy, failure→candidate-variant loop. Original notes: experiment categories
   (capability/trigger/workflow/instruction/resource/tool-use/
   compatibility/reliability/efficiency), experiments creatable from
   blueprint criteria or failed runs; failure analyzer: first observable

@@ -276,3 +276,125 @@ def diff_revisions(lab: Lab, pid: str, bid: str, from_rev: int,
             diffs.append({"field": key, "from": va, "to": vb,
                           "from_rev": a.rev, "to_rev": b.rev})
     return diffs
+
+
+# ---------- research-grounded draft (Phase 4b, deterministic) ----------
+
+
+def draft_from_research(lab: Lab, pid: str, bid: str) -> list[str]:
+    """Prefill EMPTY blueprint fields from the project's own research —
+    questions, findings, decisions. Deterministic and traceable: every
+    filled value cites its source entity. Returns the list of fields it
+    touched. Never overwrites fields the user already set."""
+    from . import research
+    bp = get_blueprint(lab, pid, bid)
+    questions = research.list_questions(lab, pid)
+    findings = research.list_findings(lab, pid)
+    touched = []
+
+    def fill(key, value):
+        cur = bp.fields.get(key)
+        empty = (not cur) if isinstance(cur, str) else (not cur)
+        if empty:
+            bp.fields[key] = value
+            touched.append(key)
+
+    q_text = [f"{q.id}: {q.question}" for q in questions]
+    if q_text:
+        fill("problem_statement",
+             "Research questions: " + "; ".join(q_text[:3]))
+        fill("research_motivation",
+             "Open research questions driving this skill: "
+             + "; ".join(q_text))
+    sup = [f for f in findings if f.status == "supported"]
+    cand = [f for f in findings if f.status in
+            ("candidate", "supported")]
+    if cand:
+        fill("decision_rules",
+             [f"({f.id}) {f.statement}" for f in cand[:6]])
+        fill("known_limitations",
+             [f"({f.id}, confidence={f.confidence}) {f.statement}"
+              for f in cand if f.confidence == "low"] or [])
+    if sup:
+        fill("research_motivation",
+             (bp.fields.get("research_motivation") or "")
+             + (" Supported findings: "
+                + "; ".join(f"{f.id}: {f.statement}"
+                            for f in sup[:4])).strip())
+    if bp.related_findings:
+        fill("verification_strategy",
+             "Re-run the evidence backing findings "
+             + ", ".join(bp.related_findings))
+    if touched:
+        _save(lab, pid, bp)
+    return touched
+
+
+# ---------- blueprint -> experiment scaffolding (Phase 5 remainder) ----
+#
+# Turns the blueprint's scope lists into real task bank entries and a
+# two-arm experiment. Task checks are left empty on purpose — evals on
+# them are 'incomplete' until a human authors deterministic checks. That
+# is honest scaffolding, not fabricated evidence.
+
+
+def experiment_from_blueprint(lab: Lab, pid: str, bid: str,
+                              skill_id: str, variant_id: str,
+                              exp_id: str | None = None) -> tuple:
+    """Create tasks + experiment.yaml from blueprint scope lists.
+    Returns (exp_id, [new task ids], [skipped task ids])."""
+    import re
+    from .models import dump_yaml
+    bp = get_blueprint(lab, pid, bid)
+    slug = lambda s, i, p: re.sub(r"[^a-z0-9]+", "-", s.lower())[:32] \
+        .strip("-") or f"{p}{i}"
+    created, skipped = [], []
+    task_ids = []
+    specs = [(t, "activation-positive", "expected")
+             for t in bp.fields.get("in_scope_tasks") or []]
+    specs += [(t, "activation-negative", "unexpected")
+              for t in bp.fields.get("out_of_scope_tasks") or []]
+    skill_name = bp.fields.get("name") or skill_id
+    for i, (desc, kind, rel_key) in enumerate(specs, 1):
+        tid = slug(desc, i, "t")
+        td = lab.tasks_dir / tid
+        task_ids.append(tid)
+        if (td / "task.yaml").is_file():
+            skipped.append(tid)
+            continue
+        td.mkdir(parents=True)
+        prompt = f"# {desc}\n\n" \
+                 f"Scenario drafted from blueprint `{bp.id}` " \
+                 f"({pid}). Author fixtures + checks before relying on " \
+                 "scores.\n"
+        (td / "prompt.md").write_text(prompt)
+        rel = {rel_key: [skill_name], "unexpected" if rel_key == "expected"
+               else "expected": []}
+        dump_yaml({"id": tid, "kind": kind, "prompt": "prompt.md",
+                   "fixtures": [], "skill_relevance": rel,
+                   "deterministic_checks": []},
+                  td / "task.yaml")
+        created.append(tid)
+    exp_id = exp_id or f"exp-{bid}"
+    ed = lab.experiments_dir / exp_id
+    if (ed / "experiment.yaml").is_file():
+        raise LabError(f"experiment '{exp_id}' already exists")
+    ed.mkdir(parents=True)
+    dump_yaml({
+        "id": exp_id,
+        "title": f"{bp.title or bid} — blueprint scaffold",
+        "hypothesis": bp.fields.get("problem_statement") or "",
+        "independent_var": "skill_variant",
+        "fixed": {"model": lab.cfg.get("model", "mock"),
+                  "injection_mode": "available"},
+        "arms": [{"name": "control", "skill": None},
+                 {"name": "treatment",
+                  "skill": f"{skill_id}@{variant_id}"}],
+        "tasks": task_ids,
+        "rollouts_per_arm": 3,
+        "status": "designed",
+        "conclusion": None,
+        # provenance: which spec generated this experiment
+        "blueprint": f"{pid}/{bid}@r{bp.rev}",
+    }, ed / "experiment.yaml")
+    return exp_id, created, skipped

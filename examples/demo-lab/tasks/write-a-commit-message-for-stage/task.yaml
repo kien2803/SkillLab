@@ -1,0 +1,9 @@
+id: write-a-commit-message-for-stage
+kind: activation-positive
+prompt: prompt.md
+fixtures: []
+skill_relevance:
+  expected:
+  - commit-helper
+  unexpected: []
+deterministic_checks: []

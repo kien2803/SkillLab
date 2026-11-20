@@ -130,6 +130,9 @@ python3 -m venv .venv
   <id>`; results are mock-labelled when model is mock.
 - Principles (`principles/*.md`) can carry `lint:` rules in frontmatter —
   the knowledge feedback loop: confirmed insights lint new skills.
+- `lab skill preview <ref>` shows frontmatter/sections/resources + token estimate; `lab skill check <ref>` runs analyzer + frontmatter-schema validation; `lab skill resource <ref> <path>` copies a file into the variant's `resources/`. `lab blueprint drift <proj> <bp> --ref <skill@var>` diffs the on-disk artifact vs a fresh emit — 'synced' / 'drifted' + unified diff (the provenance comment is ignored).
+- `lab ai suggest <ref> [--llm]` — deterministic patch proposals by default; `--llm` asks the lab's `model` (real or `cmd:` driver) for full-file rewrite proposals. Both go through the same `proposals/` gate: diff preview → `approve` → `apply` (original content kept). `--llm` refuses when model is mock. `lab blueprint draft <proj> <bp>` deterministically prefills empty blueprint fields from the project's questions/findings (cites source ids). `--format system-prompt` emits the same blueprint without YAML frontmatter.
+- `lab blueprint experiment <proj> <bp> --skill S --variant V` scaffolds real task-bank entries from in_scope/out_of_scope lists + a two-arm experiment.yaml (tasks are drafts — evals stay 'incomplete' until checks are authored).
 - `lab ui` generates a static HTML dashboard in `ui/` (no deps, works
   offline): Overview (stat cards, regression alerts, recent runs), Skills
   (registry + per-skill variant comparison), Benchmarks (variant/model/
