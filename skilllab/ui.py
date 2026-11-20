@@ -200,7 +200,7 @@ def _nav(active: str, depth: int = 0) -> str:
         ("index", "Overview"), ("research", "Research"),
         ("skills", "Skills"), ("experiments", "Experiments"),
         ("regressions", "Regressions"), ("benchmarks", "Benchmarks"),
-        ("insights", "Knowledge")]
+        ("lineage", "Lineage"), ("insights", "Knowledge")]
     links = "".join(
         f'<a href="{pre}{k}.html" class="{"active" if k == active else ""}">'
         f'{v}</a>' for k, v in groups)
@@ -1053,6 +1053,43 @@ def _blueprint_page(lab: Lab, pid: str, bid: str) -> str:
     return "".join(out)
 
 
+
+def _lineage(lab: Lab) -> str:
+    """Evidence-graph view: variant -> blueprint -> research ->
+    experiments -> runs -> insights, for every traced variant."""
+    from .release import trace
+    rows = []
+    for m in lab.skills():
+        for v in m.variants:
+            try:
+                tr = trace(lab, f"{m.id}@{v.id}")
+            except LabError:
+                continue
+            chain = [f"<code>{m.id}@{v.id}</code>"]
+            if tr["blueprint"]:
+                b = tr["blueprint"]
+                chain.append(
+                    f'blueprint <a href="blueprint-{b["project"]}-'
+                    f'{b["id"]}.html">{b["id"]}</a>@r{b["rev"]}'
+                    + (f' (now r{b["rev_current"]})'
+                       if b.get("rev_current", b["rev"]) != b["rev"]
+                       else ""))
+            if tr["project"]:
+                chain.append(f"project {_esc(tr['project'])}")
+            rows.append(
+                "<tr><td>" + " &rarr; ".join(chain) + "</td>"
+                f"<td>{len(tr['findings'])}</td>"
+                f"<td>{len(tr['experiments'])}</td>"
+                f"<td>{len(tr['runs'])}</td>"
+                f"<td>{len(tr['insights'])}</td></tr>")
+    if not rows:
+        return ("<p class=muted>No traced lineage yet — generate a "
+                "skill from a blueprint or run an experiment.</p>")
+    return ("<table class=sortable><tr><th>chain</th>"
+            "<th>findings</th><th>experiments</th><th>runs</th>"
+            "<th>insights</th></tr>" + "".join(rows) + "</table>")
+
+
 def generate(lab: Lab) -> Path:
     out = lab.d("ui")
     out.mkdir(exist_ok=True)
@@ -1087,6 +1124,9 @@ def generate(lab: Lab) -> Path:
               "experiments"))
     (out / "insights.html").write_text(
         _page(lab, "Knowledge Base", _insights(lab), "insights"))
+    (out / "lineage.html").write_text(
+        _page(lab, "Lineage — evidence graph", _lineage(lab),
+              "lineage"))
 
     # per-skill detail pages
     for m in lab.skills():

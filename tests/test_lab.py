@@ -1592,3 +1592,25 @@ def test_experiment_from_blueprint_cli(lab):
     assert rc == 0
     assert (lab.experiments_dir / "exp-bp-c" /
             "experiment.yaml").is_file()
+
+
+def test_failure_candidate(lab):
+    from skilllab import failure
+    from skilllab.models import load_yaml, dump_yaml
+    d = _mkrun(lab, "r-fail")
+    ry = load_yaml(d / "run.yaml"); ry["skill_ref"] = "commit-helper@v1"
+    dump_yaml(ry, d / "run.yaml")
+    dump_yaml({"checks": [{"id": "x", "method": "deterministic",
+                           "status": "failed"}],
+               "status": "failed", "success": False}, d / "eval.yaml")
+    rep = failure.analyze_run(lab, "r-fail")
+    rep["proposals"] = failure.proposals(rep)
+    failure.write_report(lab, rep)
+    dest = failure.candidate(lab, "r-fail", "v2-cand")
+    assert (dest / "SKILL.md").is_file()
+    md = (dest / "PROPOSALS.md").read_text()
+    assert "Improvement proposals" in md and "r-fail" in md
+    meta = lab.skill("commit-helper")
+    assert any(v.id == "v2-cand" for v in meta.variants)
+    with pytest.raises(LabError):
+        failure.candidate(lab, "r-fail", "v2-cand")

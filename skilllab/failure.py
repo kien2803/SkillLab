@@ -18,8 +18,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from .lab import Lab, LabError
-from .models import (EvalResult, RunRecord, TaskSpec, dump_yaml,
-                     load_yaml, parse_skill_ref)
+from .models import (EvalResult, RunRecord, SkillMeta, TaskSpec,
+                     Variant, dump_yaml, load_yaml, parse_skill_ref)
 
 CATEGORIES = [
     "incorrect-activation", "missing-context", "ambiguous-instructions",
@@ -287,3 +287,43 @@ def write_report(lab: Lab, report: dict) -> Path:
     p = d / f"{report['run_id']}.yaml"
     dump_yaml({**report, "proposals": proposals(report)}, p)
     return p
+
+
+# ---------- candidate variant from failure (closes the improve loop) ---
+
+
+def candidate(lab: Lab, run_id: str, new_variant: str) -> Path:
+    """Clone the failed run's variant into a new candidate variant and
+    carry the failure report's proposals along as PROPOSALS.md — the
+    improvement plan travels with the candidate. The original variant
+    is untouched."""
+    import shutil as _sh
+    report = load_yaml(lab.d("failures") / f"{run_id}.yaml")
+    if not report:
+        report = analyze_run(lab, run_id)
+        report["proposals"] = proposals(report)
+        write_report(lab, report)
+    sid, vid = parse_skill_ref(report["skill_ref"])
+    src = lab.variant_dir(sid, vid)
+    sdir = lab.skills_dir / sid
+    dest = sdir / "variants" / new_variant
+    if dest.exists():
+        raise LabError(f"variant '{new_variant}' already exists")
+    _sh.copytree(src, dest)
+    lines = [f"# Improvement proposals — from failure analysis "
+             f"`{run_id}`", "",
+             f"verdict: **{report['verdict']}**", ""]
+    for i, p in enumerate(report.get("proposals") or [], 1):
+        lines += [f"## {i}. {p.get('problem', p.get('cause', ''))}", ""]
+        for k in ("evidence", "change", "expected_impact",
+                  "side_effects"):
+            if p.get(k):
+                lines.append(f"- **{k}:** {p[k]}")
+        lines.append("")
+    (dest / "PROPOSALS.md").write_text("\n".join(lines))
+    meta = SkillMeta.load(sdir)
+    meta.variants.append(Variant(
+        id=new_variant, path=f"variants/{new_variant}",
+        note=f"candidate from failure {run_id}"))
+    meta.save(sdir)
+    return dest

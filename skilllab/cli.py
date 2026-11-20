@@ -1157,6 +1157,15 @@ def cmd_bp_experiment(args) -> int:
     return 0
 
 
+def cmd_failure_candidate(args) -> int:
+    from . import failure
+    dest = failure.candidate(_lab(args), args.run_id, args.variant)
+    print(f"candidate variant → {dest}")
+    print("  PROPOSALS.md carries the improvement plan — "
+          "edit, then experiment")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lab", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1268,6 +1277,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("failure"); ss = s.add_subparsers(dest="sub", required=True)
     x = ss.add_parser("analyze"); x.add_argument("run_id"); x.add_argument("--write", action="store_true"); x.set_defaults(f=cmd_failure_analyze)
     x = ss.add_parser("list"); x.set_defaults(f=cmd_failure_list)
+    x = ss.add_parser("candidate"); x.add_argument("run_id"); x.add_argument("variant"); x.set_defaults(f=cmd_failure_candidate)
     x = ss.add_parser("show"); x.add_argument("run_id"); x.set_defaults(f=cmd_failure_show)
 
     s = sub.add_parser("release"); ss = s.add_subparsers(dest="sub", required=True)
