@@ -77,3 +77,210 @@ def trace(ref: str, l: Lab = Depends(lab)):
         return do_trace(l, ref)
     except LabError as e:
         raise HTTPException(404, str(e))
+
+
+# ---------------- auth (single-user token) ----------------
+
+import secrets
+from fastapi import Header
+from pydantic import BaseModel
+
+_TOKEN = os.environ.get("SKILLLAB_TOKEN", "")
+if not _TOKEN:
+    _TOKEN = secrets.token_urlsafe(24)
+    import sys
+    print(f"[skilllab-web] dev token (set SKILLLAB_TOKEN to fix): "
+          f"{_TOKEN}", file=sys.stderr)
+
+
+def auth(authorization: str = Header(default="")) -> None:
+    if authorization != f"Bearer {_TOKEN}":
+        raise HTTPException(401, "missing/invalid bearer token")
+
+
+class ProjectIn(BaseModel):
+    id: str
+    title: str = ""
+    objective: str = ""
+
+
+class QuestionIn(BaseModel):
+    text: str
+    objective: str = ""
+    hypothesis: str = ""
+
+
+class FindingIn(BaseModel):
+    statement: str
+    kind: str = "observation"
+    confidence: str = "low"
+    question: str = ""
+    sources: list[str] = []
+    evidence: list[str] = []
+
+
+class BpFieldIn(BaseModel):
+    fields: dict = {}
+
+
+class GenerateIn(BaseModel):
+    skill: str
+    variant: str
+    format: str = "skill-md"
+    force: bool = False
+
+
+# ---------------- research write ----------------
+
+@app.post("/api/v1/projects", dependencies=[Depends(auth)])
+def new_project(body: ProjectIn, l: Lab = Depends(lab)):
+    from skilllab import research
+    try:
+        research.new_project(l, body.id, body.title, body.objective)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"id": body.id}
+
+
+@app.post("/api/v1/projects/{pid}/questions",
+          dependencies=[Depends(auth)])
+def new_question(pid: str, body: QuestionIn, l: Lab = Depends(lab)):
+    from skilllab import research
+    try:
+        q = research.add_question(l, pid, body.text, body.objective,
+                                  body.hypothesis)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return q.model_dump(mode="json")
+
+
+@app.post("/api/v1/projects/{pid}/findings",
+          dependencies=[Depends(auth)])
+def new_finding(pid: str, body: FindingIn, l: Lab = Depends(lab)):
+    from skilllab import research
+    try:
+        f = research.add_finding(l, pid, body.statement, kind=body.kind,
+                                 confidence=body.confidence,
+                                 question=body.question,
+                                 sources=body.sources,
+                                 evidence=body.evidence)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return f.model_dump(mode="json")
+
+
+# ---------------- blueprints ----------------
+
+@app.get("/api/v1/projects/{pid}/blueprints")
+def blueprints(pid: str, l: Lab = Depends(lab)):
+    from skilllab import blueprint
+    return [b.model_dump(mode="json")
+            for b in blueprint.list_blueprints(l, pid)]
+
+
+@app.post("/api/v1/projects/{pid}/blueprints/{bid}/fields",
+          dependencies=[Depends(auth)])
+def bp_set(pid: str, bid: str, body: BpFieldIn, l: Lab = Depends(lab)):
+    from skilllab import blueprint
+    try:
+        for k, v in body.fields.items():
+            blueprint.set_field(l, pid, bid, k, v)
+    except LabError as e:
+        raise HTTPException(400, str(e))
+    return blueprint.get_blueprint(l, pid, bid).model_dump(mode="json")
+
+
+@app.get("/api/v1/projects/{pid}/blueprints/{bid}/validate")
+def bp_validate(pid: str, bid: str, l: Lab = Depends(lab)):
+    from skilllab import blueprint
+    return blueprint.validate(l, pid, bid)
+
+
+@app.post("/api/v1/projects/{pid}/blueprints/{bid}/generate",
+          dependencies=[Depends(auth)])
+def bp_generate(pid: str, bid: str, body: GenerateIn,
+                l: Lab = Depends(lab)):
+    from skilllab import studio
+    try:
+        out = studio.generate_skill(l, pid, bid, body.skill,
+                                    body.variant, body.format,
+                                    body.force)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"path": str(out)}
+
+
+# ---------------- studio / ai / failure / release ----------------
+
+@app.get("/api/v1/skills/{ref}/preview")
+def preview(ref: str, l: Lab = Depends(lab)):
+    from skilllab import studio
+    try:
+        return studio.preview(l, ref)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/v1/skills/{ref}/check")
+def check(ref: str, l: Lab = Depends(lab)):
+    from skilllab import studio
+    return studio.validate_skill(l, ref)
+
+
+@app.post("/api/v1/skills/{ref}/proposals", dependencies=[Depends(auth)])
+def suggest(ref: str, l: Lab = Depends(lab)):
+    from skilllab import architect
+    return [p.model_dump(mode="json") for p in architect.suggest(l, ref)]
+
+
+@app.get("/api/v1/proposals")
+def proposals(l: Lab = Depends(lab)):
+    from skilllab import architect
+    return [p.model_dump(mode="json") for p in architect.list_proposals(l)]
+
+
+@app.post("/api/v1/proposals/{pid}/approve", dependencies=[Depends(auth)])
+def approve(pid: str, l: Lab = Depends(lab)):
+    from skilllab import architect
+    architect.set_status(l, pid, "approved")
+    return {"id": pid, "status": "approved"}
+
+
+@app.post("/api/v1/proposals/{pid}/apply", dependencies=[Depends(auth)])
+def apply_prop(pid: str, l: Lab = Depends(lab)):
+    from skilllab import architect
+    try:
+        out = architect.apply(l, pid)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"applied": str(out)}
+
+
+@app.get("/api/v1/failures")
+def failures(l: Lab = Depends(lab)):
+    d = l.d("failures")
+    if not d.is_dir():
+        return []
+    from skilllab.models import load_yaml
+    return [load_yaml(p) for p in sorted(d.glob("*.yaml"))]
+
+
+@app.post("/api/v1/failures/{run_id}", dependencies=[Depends(auth)])
+def analyze(run_id: str, l: Lab = Depends(lab)):
+    from skilllab import failure
+    try:
+        rep = failure.analyze_run(l, run_id)
+        rep["proposals"] = failure.proposals(rep)
+        failure.write_report(l, rep)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return rep
+
+
+@app.get("/api/v1/releases/{skill}/{version}/check")
+def rel_check(skill: str, version: str, l: Lab = Depends(lab)):
+    from skilllab import release
+    try:
+        return release.check(l, skill, version)
+    except LabError as e:
+        raise HTTPException(404, str(e))
