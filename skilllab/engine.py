@@ -265,7 +265,9 @@ def run_rollout(lab: Lab, exp: Experiment, arm: Arm, task_id: str,
     ws.mkdir(parents=True)
 
     for fx in task.fixtures:
-        src = task_dir / fx
+        src = (task_dir / fx).resolve()
+        if not src.is_relative_to(task_dir.resolve()):
+            raise LabError(f"fixture '{fx}' escapes task dir")
         if src.is_dir():
             shutil.copytree(src, ws, dirs_exist_ok=True)
 
@@ -452,7 +454,11 @@ def validate_experiment(lab: Lab, exp: Experiment) -> tuple[list[str],
                 errors.append(f"task '{tid}': {e}")
         tdir = lab.task_dir(tid)
         for fx in t.fixtures:
-            if not (tdir / fx).exists():
+            src = (tdir / fx).resolve()
+            if not src.is_relative_to(tdir.resolve()):
+                errors.append(f"task '{tid}': fixture '{fx}' escapes "
+                              "task dir")
+            elif not src.exists():
                 errors.append(f"task '{tid}': missing fixture '{fx}'")
     dims = {
         "skill_variant": {a.skill for a in exp.arms},

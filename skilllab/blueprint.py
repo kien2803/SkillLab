@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from .lab import Lab, LabError
+from .lab import Lab, LabError, check_id
 from .models import (Blueprint, load_yaml, dump_yaml)
 from .research import project_dir, list_findings
 
@@ -68,7 +68,7 @@ def blueprints_dir(lab: Lab, pid: str) -> Path:
 
 
 def blueprint_dir(lab: Lab, pid: str, bid: str) -> Path:
-    d = blueprints_dir(lab, pid) / bid
+    d = blueprints_dir(lab, pid) / check_id("blueprint", bid)
     if not (d / "blueprint.yaml").is_file():
         raise LabError(f"Blueprint '{bid}' not found in project '{pid}'.")
     return d
@@ -267,6 +267,8 @@ def diff_revisions(lab: Lab, pid: str, bid: str, from_rev: int,
     if from_rev not in revs:
         raise LabError(f"revision r{from_rev} not found")
     a = revs[from_rev]
+    if to_rev is not None and to_rev not in revs:
+        raise LabError(f"revision r{to_rev} not found")
     b = revs[to_rev] if to_rev else get_blueprint(lab, pid, bid)
     diffs = []
     for key in FIELD_KEYS + ["status"]:
@@ -358,7 +360,8 @@ def experiment_from_blueprint(lab: Lab, pid: str, bid: str,
     for i, (desc, kind, rel_key) in enumerate(specs, 1):
         tid = slug(desc, i, "t")
         td = lab.tasks_dir / tid
-        task_ids.append(tid)
+        if tid not in task_ids:
+            task_ids.append(tid)   # slug collisions must not dup tasks
         if (td / "task.yaml").is_file():
             skipped.append(tid)
             continue
@@ -375,7 +378,7 @@ def experiment_from_blueprint(lab: Lab, pid: str, bid: str,
                    "deterministic_checks": []},
                   td / "task.yaml")
         created.append(tid)
-    exp_id = exp_id or f"exp-{bid}"
+    exp_id = check_id("experiment", exp_id or f"exp-{bid}")
     ed = lab.experiments_dir / exp_id
     if (ed / "experiment.yaml").is_file():
         raise LabError(f"experiment '{exp_id}' already exists")

@@ -21,7 +21,7 @@ from pathlib import Path
 
 from .engine import run_rollout, validate_experiment
 from .evaluate import evaluate_run
-from .lab import Lab, LabError
+from .lab import Lab, LabError, check_id
 from .models import (Arm, EvalResult, Experiment, FixedConfig, RunRecord,
                      TaskSpec, dump_yaml, load_yaml)
 from .report import load_runs
@@ -348,7 +348,7 @@ def _first_ws(rows: list[tuple[RunRecord, EvalResult | None]],
 
 def analyze(lab: Lab, reg_id: str) -> dict:
     """Recompute the full structured result from stored run data."""
-    rdir = lab.d("regressions") / reg_id
+    rdir = lab.d("regressions") / check_id("regression", reg_id)
     meta_file = rdir / "regression.yaml"
     if not meta_file.is_file():
         raise LabError(f"regression '{reg_id}' not found")

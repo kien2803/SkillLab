@@ -30,7 +30,7 @@ from pathlib import Path
 
 import yaml
 
-from .lab import Lab, LabError
+from .lab import Lab, LabError, check_id
 from .models import (ProjectMeta, ResearchDecision, ResearchFinding,
                      ResearchQuestion, ResearchSource, load_yaml,
                      dump_yaml, parse_frontmatter)
@@ -84,7 +84,7 @@ def projects_dir(lab: Lab) -> Path:
 
 
 def project_dir(lab: Lab, pid: str) -> Path:
-    d = projects_dir(lab) / pid
+    d = projects_dir(lab) / check_id("project", pid)
     if not (d / "project.yaml").is_file():
         raise LabError(f"Research project '{pid}' not found.")
     return d
@@ -185,7 +185,7 @@ def _load_all(lab: Lab, pid: str, kind: str, cls) -> list:
 
 
 def _load_one(lab: Lab, pid: str, kind: str, eid: str, cls):
-    p = _entity_dir(lab, pid, kind) / f"{eid}.yaml"
+    p = _entity_dir(lab, pid, kind) / f"{check_id(kind, eid)}.yaml"
     if not p.is_file():
         raise LabError(f"{kind[:-1].title()} '{eid}' not found in "
                        f"project '{pid}'.")

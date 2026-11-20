@@ -166,7 +166,10 @@ def _check_resource_bloat(vdir: Path, cfg: dict) -> list[Finding]:
     out = []
     for f in sorted(rdir.rglob("*")):
         if f.is_file():
-            toks = est_tokens(f.read_text())
+            try:
+                toks = est_tokens(f.read_text())
+            except (UnicodeDecodeError, OSError):
+                continue   # binary resource — token cost n/a
             if toks > limit:
                 out.append(Finding("progressive-disclosure", "warn",
                                    f"resource ~{toks} tokens (>{limit}) — "
@@ -202,8 +205,11 @@ def _check_principles(lab: Lab, vdir: Path) -> list[Finding]:
                     entry.read_text()) if entry else ("", "")
             else:
                 target = entry.read_text() if entry else ""
-            hit = bool(re.search(rule.get("pattern", "$^"), target,
-                                 re.IGNORECASE))
+            try:
+                hit = bool(re.search(rule.get("pattern", "$^"), target,
+                                     re.IGNORECASE))
+            except re.error:
+                continue   # malformed lint pattern — skip, don't crash
             if hit == bool(rule.get("negate")):
                 continue  # no violation
             out.append(Finding(
@@ -232,7 +238,7 @@ def analyze_variant(lab: Lab, skill_id: str, vdir: Path) -> list[Finding]:
 def analyze_skill(lab: Lab, skill_id: str) -> dict[str, list[Finding]]:
     meta = lab.skill(skill_id)
     return {
-        v.id: analyze_variant(lab, skill_id, lab.skills_dir / skill_id / v.path)
+        v.id: analyze_variant(lab, skill_id, lab.variant_dir(skill_id, v.id))
         for v in meta.variants
     }
 
@@ -249,7 +255,7 @@ def analyze_registry_conflicts(lab: Lab) -> list[Finding]:
     seen: list[tuple[str, set[str]]] = []
     for meta in lab.skills():
         for v in meta.variants:
-            vdir = lab.skills_dir / meta.id / v.path
+            vdir = lab.variant_dir(meta.id, v.id)
             seen.append((f"{meta.id}@{v.id}", _tokens(skill_description(vdir))))
     out = []
     for i in range(len(seen)):

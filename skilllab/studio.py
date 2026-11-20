@@ -15,6 +15,7 @@ Safety:
 
 from __future__ import annotations
 
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -41,9 +42,14 @@ def _section(title: str, body: str) -> str:
 def emit_skill_md(bp: Blueprint) -> str:
     f = bp.fields
     desc = f.get("description") or f.get("problem_statement") or ""
-    out = (f"---\nname: {f.get('name') or bp.id}\n"
+    # yaml-safe scalars: collapse whitespace/newlines so frontmatter
+    # can't be broken by field content
+    name = " ".join(str(f.get("name") or bp.id).split())
+    desc = " ".join(str(desc).split())
+    title = " ".join(str(bp.title or f.get("name") or bp.id).split())
+    out = (f"---\nname: {name}\n"
            f"description: >-\n  {desc}\n---\n\n"
-           f"# {bp.title or f.get('name') or bp.id}\n\n")
+           f"# {title}\n\n")
     intro = f.get("target_capability") or f.get("problem_statement") or ""
     if intro:
         out += intro + "\n"
@@ -90,12 +96,19 @@ FORMATS = {
 # ---------- generation ----------
 
 
+_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
 def generate_skill(lab: Lab, pid: str, bid: str, skill_id: str,
                    variant_id: str, fmt: str = "skill-md",
                    force: bool = False) -> Path:
     if fmt not in FORMATS:
         raise LabError(f"unknown format '{fmt}' — "
                        f"available: {', '.join(FORMATS)}")
+    for name, val in (("skill", skill_id), ("variant", variant_id)):
+        if not _ID_RE.fullmatch(val):
+            raise LabError(f"invalid {name} id {val!r} "
+                           "(allowed: [A-Za-z0-9._-], starts alnum)")
     bp = get_blueprint(lab, pid, bid)
     errors = [i for i in validate(lab, pid, bid)
               if i["severity"] == "error"]
@@ -107,6 +120,8 @@ def generate_skill(lab: Lab, pid: str, bid: str, skill_id: str,
     sdir = lab.skills_dir / skill_id
     vpath = Path("variants") / variant_id
     vdir = sdir / vpath
+    if not vdir.resolve().is_relative_to(sdir.resolve()):
+        raise LabError(f"variant id {variant_id!r} escapes skill dir")
 
     if sdir.is_dir() and (sdir / "skill.yaml").is_file():
         meta = SkillMeta.load(sdir)
@@ -171,8 +186,7 @@ def preview(lab: Lab, ref: str) -> dict:
     text = entry.read_text()
     fm, body = parse_frontmatter(text)
     sections = [m.group(1).strip() for m in
-                __import__("re").finditer(r"^#{1,3}\s+(.+)$", body,
-                                          __import__("re").M)]
+                re.finditer(r"^#{1,3}\s+(.+)$", body, re.M)]
     resources = [str(p.relative_to(vdir)) for p in sorted(vdir.rglob("*"))
                  if p.is_file() and p != entry]
     return {
@@ -229,15 +243,15 @@ def artifact_diff(lab: Lab, pid: str, bid: str, ref: str) -> dict:
         raise LabError(f"no artifact at {vdir}")
     fresh = emit_skill_md(bp)
     current = entry.read_text()
-    import re as _re, difflib
+    import difflib
     # which revision generated this file? parse the provenance comment
-    m = _re.search(r"blueprint \S+ r(\d+)", current)
+    m = re.search(r"blueprint \S+ r(\d+)", current)
     gen_rev = int(m.group(1)) if m else None
     # ignore the provenance comment itself — generation bumps the
     # blueprint rev (status/generated_variants), so the file always
     # trails by one rev even when content is identical
-    strip = lambda t: _re.sub(r"<!-- generated from blueprint.*-->\n?",
-                              "", t)
+    strip = lambda t: re.sub(r"<!-- generated from blueprint.*-->\n?",
+                             "", t)
     status = "synced" if strip(current) == strip(fresh) else "drifted"
     diff = "".join(difflib.unified_diff(
         current.splitlines(True), fresh.splitlines(True),

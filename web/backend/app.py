@@ -16,6 +16,15 @@ LAB_DIR = Path(os.environ.get("SKILLLAB_DIR", "examples/demo-lab"))
 
 app = FastAPI(title="SkillLab API", version="0.1.0")
 
+
+@app.exception_handler(LabError)
+def _lab_error_handler(_req, exc: LabError):
+    """Catch-all for domain errors outside per-endpoint try blocks —
+    invalid ids/inputs surface as 400, never as a bare 500."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
 def lab() -> Lab:
     root = Path(os.environ.get("SKILLLAB_DIR", str(LAB_DIR)))
     if not (root / "lab.yaml").is_file():
@@ -251,7 +260,10 @@ def proposals(l: Lab = Depends(lab)):
 @app.post("/api/v1/proposals/{pid}/approve", dependencies=[Depends(auth)])
 def approve(pid: str, l: Lab = Depends(lab)):
     from skilllab import architect
-    architect.set_status(l, pid, "approved")
+    try:
+        architect.set_status(l, pid, "approved")
+    except LabError as e:
+        raise HTTPException(404, str(e))
     return {"id": pid, "status": "approved"}
 
 
@@ -290,7 +302,8 @@ def analyze(run_id: str, l: Lab = Depends(lab)):
 def rel_check(skill: str, version: str, l: Lab = Depends(lab)):
     from skilllab import release
     try:
-        return release.check(l, skill, version)
+        release.list_releases(l, skill)          # 404 when absent
+        return release.checklist(l, skill, version)
     except LabError as e:
         raise HTTPException(404, str(e))
 
@@ -372,7 +385,8 @@ def dr_start(pid: str, body: DrIn, l: Lab = Depends(lab)):
           dependencies=[Depends(auth)])
 def dr_run(pid: str, rid: str, l: Lab = Depends(lab)):
     from skilllab import deep
-    rd = deep.runs_dir(l, pid) / rid
+    from skilllab.lab import check_id
+    rd = deep.runs_dir(l, pid) / check_id("run", rid)
     if not (rd / "run.yaml").is_file():
         raise HTTPException(404, "research run not found")
     deep.approve(rd)
@@ -385,7 +399,8 @@ def dr_run(pid: str, rid: str, l: Lab = Depends(lab)):
 @app.get("/api/v1/research/{pid}/{rid}")
 def dr_get(pid: str, rid: str, l: Lab = Depends(lab)):
     from skilllab import deep
-    rd = deep.runs_dir(l, pid) / rid
+    from skilllab.lab import check_id
+    rd = deep.runs_dir(l, pid) / check_id("run", rid)
     if not (rd / "run.yaml").is_file():
         raise HTTPException(404, "research run not found")
     st = deep.get(rd)
@@ -409,7 +424,9 @@ def runs(l: Lab = Depends(lab)):
     if not d.is_dir():
         return []
     out = []
-    for rd in sorted(d.iterdir()):
+    for rd in sorted(d.iterdir(),
+                     key=lambda p: (p / "run.yaml").stat().st_mtime
+                     if (p / "run.yaml").is_file() else 0):
         ry = rd / "run.yaml"
         if ry.is_file():
             out.append(RunRecord(**load_yaml(ry)).model_dump(mode="json"))
@@ -459,7 +476,7 @@ from fastapi import UploadFile
 async def upload(pid: str, file: UploadFile, l: Lab = Depends(lab)):
     """md/txt/html document upload -> text extract -> project source."""
     from skilllab import research
-    name = file.filename or "doc"
+    name = Path(file.filename or "doc").name     # strip client dirs
     if not name.lower().endswith(
             (".md", ".txt", ".html", ".htm", ".docx", ".pdf")):
         raise HTTPException(400,
@@ -470,14 +487,19 @@ async def upload(pid: str, file: UploadFile, l: Lab = Depends(lab)):
     if name.lower().endswith((".docx", ".pdf")):
         import tempfile
         from skilllab import webio
-        with tempfile.NamedTemporaryFile(
-                suffix=name[name.rfind("."):], delete=False) as tf:
-            tf.write(raw)
-            tmp = tf.name
+        tmp = None
         try:
+            with tempfile.NamedTemporaryFile(
+                    suffix=name[name.rfind("."):],
+                    delete=False) as tf:
+                tf.write(raw)
+                tmp = tf.name
             text = webio.extract_doc(tmp)
         except LabError as e:
             raise HTTPException(400, str(e))
+        finally:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
     else:
         text = raw.decode("utf-8", "replace")
     if name.lower().endswith((".html", ".htm")):
@@ -505,7 +527,8 @@ def dr_stream(pid: str, rid: str, l: Lab = Depends(lab)):
     import json, threading, time
     from fastapi.responses import StreamingResponse
     from skilllab import deep
-    rd = deep.runs_dir(l, pid) / rid
+    from skilllab.lab import check_id
+    rd = deep.runs_dir(l, pid) / check_id("run", rid)
     if not (rd / "run.yaml").is_file():
         raise HTTPException(404, "research run not found")
 
@@ -546,7 +569,8 @@ def _safe_execute(l, pid, rd):
 # ---------------- run inspection + evaluation ----------------
 
 def _run_dir(l: Lab, rid: str) -> Path:
-    rd = l.runs_dir / rid
+    from skilllab.lab import check_id
+    rd = l.runs_dir / check_id("run", rid)
     if not (rd / "run.yaml").is_file():
         raise HTTPException(404, f"run '{rid}' not found")
     return rd
@@ -580,7 +604,8 @@ def run_detail(rid: str, l: Lab = Depends(lab)):
     if ws.is_dir():
         out["artifacts"] = sorted(
             str(p.relative_to(ws)) for p in ws.rglob("*") if p.is_file())
-    frep = l.d("failures") / f"{rid}.yaml"
+    from skilllab.lab import check_id
+    frep = l.d("failures") / f"{check_id('run', rid)}.yaml"
     if frep.is_file():
         out["failure"] = load_yaml(frep)
     return out
@@ -730,7 +755,8 @@ def regressions(l: Lab = Depends(lab)):
 @app.get("/api/v1/regressions/{rid}")
 def regression_detail(rid: str, l: Lab = Depends(lab)):
     from skilllab.models import load_yaml
-    d = l.d("regressions") / rid
+    from skilllab.lab import check_id
+    d = l.d("regressions") / check_id("regression", rid)
     if not (d / "regression.yaml").is_file():
         raise HTTPException(404, f"regression '{rid}' not found")
     out = {"meta": load_yaml(d / "regression.yaml")}
@@ -1239,8 +1265,6 @@ def _exec_runs(l: Lab, eid: str, arm: str | None, limit: int | None,
                                + "; ".join(errors))
     if model and model != exp.fixed.model and not batch:
         batch = re.sub(r"[^a-z0-9-]+", "-", model.lower())[:40]
-    if model:
-        exp.fixed.model = model          # in-memory only — config kept
     planned = planned_run_ids(exp, arm, limit, batch)
     existing = [r for r in planned
                 if (l.runs_dir / r / "run.yaml").is_file()]
@@ -1250,6 +1274,8 @@ def _exec_runs(l: Lab, eid: str, arm: str | None, limit: int | None,
                  f"(e.g. {existing[0]}) — use batch or force")
     exp.status = "running"
     exp.save(l.exp_dir(exp.id))
+    if model:
+        exp.fixed.model = model  # in-memory only — after save (config kept)
     recs = []
     for a in exp.arms:
         if arm and a.name != arm:
@@ -1325,11 +1351,15 @@ def run_diff(a: str, b: str, l: Lab = Depends(lab)):
         tp = run_dir / "transcript.jsonl"
         if tp.is_file():
             for line in tp.read_text().splitlines():
-                m = json.loads(line)
+                try:
+                    m = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 if m.get("role") == "assistant" and m.get("tool_calls"):
                     for tc in m["tool_calls"]:
-                        out.append(f"assistant→{tc['function']['name']}"
-                                   f" {tc['function']['arguments'][:200]}")
+                        fn = tc.get("function") or {}
+                        out.append(f"assistant→{fn.get('name', '?')}"
+                                   f" {str(fn.get('arguments', ''))[:200]}")
                 else:
                     nm = f"[{m['name']}] " if m.get("name") else ""
                     out.append(f"{m.get('role','?')} {nm}"
@@ -1500,7 +1530,7 @@ def import_pack(body: ImportPackIn, l: Lab = Depends(lab)):
 # NOTE: must stay LAST — a `/{path:path}` GET registered earlier would
 # shadow every /api/v1 GET route defined below it.
 
-_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+_DIST = (Path(__file__).parent.parent / "frontend" / "dist").resolve()
 if _DIST.is_dir():
     from fastapi.responses import FileResponse
 
@@ -1511,4 +1541,6 @@ if _DIST.is_dir():
         f = (_DIST / path).resolve()
         if f.is_file() and _DIST in f.parents:
             return FileResponse(f)
+        if "." in Path(path).name:      # missing asset → 404, not HTML
+            raise HTTPException(404)
         return FileResponse(_DIST / "index.html")  # client routing

@@ -17,7 +17,7 @@ from datetime import date
 from pathlib import Path
 
 from .analyzer import analyze_skill
-from .lab import Lab, LabError
+from .lab import Lab, LabError, check_id
 from .models import Proposal, dump_yaml, load_yaml, parse_skill_ref
 
 ACTIONABLE = {"dead-links", "token-budget", "progressive-disclosure",
@@ -68,27 +68,6 @@ def _patches_for(f, vdir: Path) -> dict | None:
                            "into `resources/detail.md` and link to it",
                 "file": "SKILL.md"}
     return None
-
-
-def suggest(lab: Lab, ref: str) -> list[Proposal]:
-    """Generate pending proposals from analyzer findings on a variant."""
-    sid, vid = parse_skill_ref(ref)
-    vdir = _variant_dir(lab, ref)
-    findings = analyze_skill(lab, sid).get(vid or "", [])
-    out = []
-    for f in findings:
-        patch = _patches_for(f, vdir)
-        if not patch:
-            continue
-        p = Proposal(
-            id=_next_id(lab), skill=sid, variant=vid or "",
-            finding=f"{f.check}: {f.message}", patch=patch,
-            status="pending", created=date.today().isoformat())
-        p.diff_preview = preview(lab, p)
-        dump_yaml(p.model_dump(mode="json"),
-                  proposals_dir(lab) / f"{p.id}.yaml")
-        out.append(p)
-    return out
 
 
 # ---------- LLM-backed proposer (Phase 4b) ----------
@@ -189,7 +168,7 @@ def list_proposals(lab: Lab) -> list[Proposal]:
 
 
 def get(lab: Lab, pid: str) -> tuple[Proposal, Path]:
-    p = proposals_dir(lab) / f"{pid}.yaml"
+    p = proposals_dir(lab) / f"{check_id('proposal', pid)}.yaml"
     if not p.is_file():
         raise LabError(f"proposal '{pid}' not found")
     return Proposal(**load_yaml(p)), p
@@ -208,8 +187,8 @@ def _entry(vdir: Path) -> Path | None:
 
 def _patched_content(vdir: Path, patch: dict) -> tuple[str, str] | None:
     """Return (old_text, new_text) for the patch's target file."""
-    src = vdir / patch["file"]
-    if not src.is_file():
+    src = (vdir / patch["file"]).resolve()
+    if not src.is_relative_to(vdir.resolve()) or not src.is_file():
         return None
     old = src.read_text()
     if patch["type"] == "unlink":
@@ -221,7 +200,7 @@ def _patched_content(vdir: Path, patch: dict) -> tuple[str, str] | None:
         for i, ln in enumerate(lines):
             if ln.startswith("description:"):
                 desc = ln.split(":", 1)[1].strip().lstrip(">-").strip()
-                if not desc.lower().startswith("use when"):
+                if desc and not desc.lower().startswith("use when"):
                     lines[i] = ("description: >-\n"
                                 f"  Use when {desc[0].lower() + desc[1:]}")
                 break
@@ -278,8 +257,11 @@ def apply(lab: Lab, pid: str) -> Path:
     if not res:
         raise LabError("patch produced no change")
     old, new = res
+    dest = (vdir / p.patch["file"]).resolve()
+    if not dest.is_relative_to(vdir.resolve()):
+        raise LabError("patch file escapes variant dir")
     p.original_content = old
-    (vdir / p.patch["file"]).write_text(new)
+    dest.write_text(new)
     p.status = "applied"
     p.applied_at = date.today().isoformat()
     dump_yaml(p.model_dump(mode="json"), path)

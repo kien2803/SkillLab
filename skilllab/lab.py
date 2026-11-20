@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .models import Experiment, Rubric, SkillMeta, TaskSpec, load_yaml
@@ -41,10 +42,29 @@ class LabError(Exception):
     pass
 
 
+_ID_OK = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*").fullmatch
+
+
+def check_id(kind: str, val: str) -> str:
+    """Reject ids that could escape a dir join (path traversal).
+
+    Ids are filename segments — no slashes, no leading dot, no `..`."""
+    if not _ID_OK(str(val)):
+        raise LabError(f"invalid {kind} id {val!r} "
+                       "(allowed: [A-Za-z0-9._-], starts alnum)")
+    return str(val)
+
+
 class Lab:
     def __init__(self, root: Path):
         self.root = root
-        self.cfg = {**DEFAULT_CONFIG, **load_yaml(root / "lab.yaml")}
+        user = load_yaml(root / "lab.yaml")
+        self.cfg = {**DEFAULT_CONFIG, **user}
+        # nested dicts merge per-key so a partial override (e.g.
+        # `analysis: {skill_md_max_lines: 800}`) doesn't drop defaults
+        for k in ("analysis", "regression"):
+            if isinstance(user.get(k), dict):
+                self.cfg[k] = {**DEFAULT_CONFIG[k], **user[k]}
 
     # -- paths -------------------------------------------------------------
 
@@ -118,7 +138,7 @@ class Lab:
         return out
 
     def skill(self, skill_id: str) -> SkillMeta:
-        d = self.skills_dir / skill_id
+        d = self.skills_dir / check_id("skill", skill_id)
         if not (d / "skill.yaml").is_file():
             raise LabError(f"Skill '{skill_id}' not found in registry.")
         return SkillMeta.load(d)
@@ -128,11 +148,17 @@ class Lab:
         if not meta.variants:
             raise LabError(f"Skill '{skill_id}' has no variants.")
         if variant_id is None:
-            return self.skills_dir / skill_id / meta.variants[0].path
-        for v in meta.variants:
-            if v.id == variant_id:
-                return self.skills_dir / skill_id / v.path
-        raise LabError(f"Variant '{variant_id}' not found on skill '{skill_id}'.")
+            v = meta.variants[0]
+        else:
+            v = next((v for v in meta.variants if v.id == variant_id), None)
+            if v is None:
+                raise LabError(
+                    f"Variant '{variant_id}' not found on skill '{skill_id}'.")
+        check_id("skill", skill_id)
+        d = (self.skills_dir / skill_id / v.path).resolve()
+        if not d.is_relative_to(self.skills_dir.resolve()):
+            raise LabError(f"variant path '{v.path}' escapes skills dir")
+        return d
 
     def tasks(self) -> list[TaskSpec]:
         out = []
@@ -143,25 +169,25 @@ class Lab:
         return out
 
     def task(self, task_id: str) -> TaskSpec:
-        d = self.tasks_dir / task_id
+        d = self.tasks_dir / check_id("task", task_id)
         if not (d / "task.yaml").is_file():
             raise LabError(f"Task '{task_id}' not found.")
         return TaskSpec.load(d)
 
     def task_dir(self, task_id: str) -> Path:
-        return self.tasks_dir / task_id
+        return self.tasks_dir / check_id("task", task_id)
 
     def rubric(self, rubric_id: str) -> Rubric:
-        p = self.rubrics_dir / f"{rubric_id}.yaml"
+        p = self.rubrics_dir / f"{check_id('rubric', rubric_id)}.yaml"
         if not p.is_file():
             raise LabError(f"Rubric '{rubric_id}' not found.")
         return Rubric(**load_yaml(p))
 
     def experiment(self, exp_id: str) -> Experiment:
-        d = self.experiments_dir / exp_id
+        d = self.experiments_dir / check_id("experiment", exp_id)
         if not (d / "experiment.yaml").is_file():
             raise LabError(f"Experiment '{exp_id}' not found.")
         return Experiment.load(d)
 
     def exp_dir(self, exp_id: str) -> Path:
-        return self.experiments_dir / exp_id
+        return self.experiments_dir / check_id("experiment", exp_id)

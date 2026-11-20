@@ -1672,3 +1672,68 @@ def test_deep_research_plan_lifecycle(lab):
     # queries capped
     rd2 = deep.start(lab, "dp", "a;b;c;d;e;f;g;h")
     assert len(deep.get(rd2)["plan"]["queries"]) == 6
+
+
+# ------------------------------------------------- audit regression tests --
+
+def test_check_id_rejects_traversal(lab):
+    from skilllab.lab import check_id
+    for bad in ("..", "../x", "a/b", "a\\b", ".hidden", "a..b/x", ""):
+        with pytest.raises(LabError):
+            check_id("skill", bad)
+    for meth, args in ((lab.skill, ("../etc",)),
+                       (lab.task, ("../../etc",)),
+                       (lab.experiment, ("a/b",)),
+                       (lab.rubric, ("..",))):
+        with pytest.raises(LabError):
+            meth(*args)
+
+
+def test_variant_dir_containment(lab, tmp_path):
+    (tmp_path / "skills" / "commit-helper" / "skill.yaml").write_text(
+        "id: commit-helper\nkind: skill-md\nstatus: testing\n"
+        "variants:\n  - id: v-evil\n    path: ../../outside\n")
+    with pytest.raises(LabError):
+        lab.variant_dir("commit-helper", "v-evil")
+
+
+def test_generate_skill_rejects_traversal_ids(lab):
+    from skilllab import blueprint, research, studio
+    research.new_project(lab, "p", "P")
+    bp = blueprint.new_blueprint(lab, "p", "b", "B")
+    for f in blueprint.FIELD_KEYS:
+        blueprint.set_field(lab, "p", "b", f, ["x"] if f != "name" else "x")
+    with pytest.raises(LabError):
+        studio.generate_skill(lab, "p", "b", "../../evil", "v1")
+    with pytest.raises(LabError):
+        studio.generate_skill(lab, "p", "b", "ok-skill", "../v")
+
+
+def test_fixture_escape_rejected(lab, tmp_path):
+    td = tmp_path / "tasks" / "evil-task"
+    td.mkdir()
+    (td / "task.yaml").write_text(
+        "id: evil-task\nkind: performance\nprompt: do x\n"
+        "fixtures: ['../../secret.txt']\nskill_relevance:\n"
+        "  expected: []\n  unexpected: []\ndeterministic_checks: []\n")
+    exp = Experiment(**{**__import__("yaml").safe_load(EXP_YAML),
+                        "id": "exp-evil", "tasks": ["evil-task"]})
+    from skilllab.engine import validate_experiment
+    errors, _ = validate_experiment(lab, exp)
+    assert any("escapes" in e for e in errors)
+
+
+def test_analyzer_binary_resource_no_crash(lab, tmp_path):
+    rdir = (tmp_path / "skills" / "commit-helper" / "variants" / "v1"
+            / "resources")
+    (rdir / "logo.png").write_bytes(b"\x89PNG\r\n\xff\xfe binary")
+    out = analyze_skill(lab, "commit-helper")
+    assert "v1" in out  # completed without UnicodeDecodeError
+
+
+def test_diff_revisions_missing(lab):
+    from skilllab import blueprint, research
+    research.new_project(lab, "p2", "P")
+    blueprint.new_blueprint(lab, "p2", "b", "B")
+    with pytest.raises(LabError):
+        blueprint.diff_revisions(lab, "p2", "b", 99)

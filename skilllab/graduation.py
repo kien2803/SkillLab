@@ -12,7 +12,7 @@ from __future__ import annotations
 import statistics
 from dataclasses import dataclass, field
 
-from .lab import Lab
+from .lab import Lab, LabError
 from .models import EvalResult, RunRecord, load_yaml
 
 DEFAULT_GRADUATION = {
@@ -65,7 +65,10 @@ def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
             else (1.0 if ev.status == "passed" else 0.0)
 
     for rec, ev in skill_runs:
-        task = lab.task(rec.task)
+        try:
+            task = lab.task(rec.task)
+        except LabError:
+            continue   # task left the bank — run isn't usable evidence
         activated = {e.skill for e in rec.skill_events
                      if e.event == "activated"}
         # activation metrics are only meaningful when the agent had to

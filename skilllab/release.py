@@ -20,13 +20,13 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .analyzer import analyze_skill
-from .lab import Lab, LabError
+from .lab import Lab, LabError, check_id
 from .models import (Release, load_yaml, dump_yaml, parse_skill_ref)
 from .report import load_runs
 
 
 def releases_dir(lab: Lab, skill_id: str) -> Path:
-    return lab.d("releases") / skill_id
+    return lab.d("releases") / check_id("skill", skill_id)
 
 
 def new_release(lab: Lab, skill_id: str, version: str,
@@ -53,7 +53,7 @@ def new_release(lab: Lab, skill_id: str, version: str,
 
 
 def _load(lab: Lab, skill_id: str, version: str) -> tuple[Release, Path]:
-    p = releases_dir(lab, skill_id) / f"{version}.yaml"
+    p = releases_dir(lab, skill_id) / f"{check_id('version', version)}.yaml"
     if not p.is_file():
         raise LabError(f"release '{skill_id}@{version}' not found")
     return Release(**load_yaml(p)), p
@@ -183,12 +183,17 @@ def trace(lab: Lab, skill_ref: str) -> dict:
         except LabError:
             pass
 
-    # experiments + runs touching this skill_ref
+    # experiments + runs touching this skill_ref — exact arm match, not
+    # substring ('skill@v2' must not match 'skill@v2-bad')
     ref = f"{sid}@{vid}"
     if lab.experiments_dir.is_dir():
         for ed in lab.experiments_dir.iterdir():
             ey = ed / "experiment.yaml"
-            if ey.is_file() and ref in ey.read_text():
+            if not ey.is_file():
+                continue
+            arms = load_yaml(ey).get("arms") or []
+            if any(a.get("skill") == ref for a in arms
+                   if isinstance(a, dict)):
                 out["experiments"].add(ed.name)
     if lab.runs_dir.is_dir():
         for rd in sorted(lab.runs_dir.iterdir()):

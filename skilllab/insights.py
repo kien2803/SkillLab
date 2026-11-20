@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from .lab import Lab, LabError
+from .lab import Lab, LabError, check_id
 from .models import load_yaml, parse_frontmatter
 
 TEMPLATE = """---
@@ -71,6 +71,7 @@ def list_insights(lab: Lab) -> list[dict]:
 
 
 def _set_status(lab: Lab, insight_id: str, status: str) -> Path:
+    check_id("insight", insight_id)
     for d in (lab.insights_dir, lab.principles_dir):
         p = d / f"{insight_id}.md"
         if p.is_file():
@@ -84,6 +85,7 @@ def _set_status(lab: Lab, insight_id: str, status: str) -> Path:
 
 def confirm(lab: Lab, insight_id: str) -> Path:
     """Mark an insight confirmed — requires at least one valid evidence ref."""
+    check_id("insight", insight_id)
     for d in (lab.insights_dir, lab.principles_dir):
         p = d / f"{insight_id}.md"
         if p.is_file():
@@ -130,7 +132,7 @@ def promote(lab: Lab, insight_id: str) -> Path:
     and a completed writeup (no TODO placeholders). Existing principles
     are never overwritten.
     """
-    src = lab.insights_dir / f"{insight_id}.md"
+    src = lab.insights_dir / f"{check_id('insight', insight_id)}.md"
     if not src.is_file():
         raise LabError(f"Insight '{insight_id}' not found.")
     fm, body = parse_frontmatter(src.read_text())

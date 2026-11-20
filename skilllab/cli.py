@@ -263,8 +263,6 @@ def _run_and_eval(lab: Lab, exp: Experiment, arm_filter: str | None,
         print(f"warn: {w}", file=sys.stderr)
     if errors:
         raise LabError("experiment invalid:\n  - " + "\n  - ".join(errors))
-    if model_override:
-        exp.fixed.model = model_override  # in-memory only — config unchanged
     planned = planned_run_ids(exp, arm_filter, limit, batch)
     existing = [r for r in planned
                 if (lab.runs_dir / r / "run.yaml").is_file()]
@@ -275,6 +273,9 @@ def _run_and_eval(lab: Lab, exp: Experiment, arm_filter: str | None,
             "--batch <name>` for a new batch, or --force to overwrite.")
     exp.status = "running"
     exp.save(lab.exp_dir(exp.id))
+    if model_override:
+        exp.fixed.model = model_override  # in-memory — after save,
+        # experiment.yaml keeps the pinned model
     done = 0
     for arm in exp.arms:
         if arm_filter and arm.name != arm_filter:

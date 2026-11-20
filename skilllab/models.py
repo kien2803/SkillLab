@@ -124,8 +124,9 @@ class TaskSpec(BaseModel):
         return cls(**load_yaml(task_dir / "task.yaml"))
 
     def resolve_prompt(self, task_dir: Path) -> str:
-        p = task_dir / self.prompt
-        if self.prompt and p.is_file():
+        p = (task_dir / self.prompt).resolve()
+        if self.prompt and p.is_file() \
+                and p.is_relative_to(task_dir.resolve()):
             return p.read_text()
         return self.prompt
 

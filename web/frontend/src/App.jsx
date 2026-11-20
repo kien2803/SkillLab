@@ -1168,6 +1168,7 @@ function RunDetail() {
   const load = () => api("/runs/" + rid).then(setD)
     .catch((e) => setMsg(String(e)));
   useEffect(load, [rid]);
+  useEffect(() => { setArt(null); setScores({}); setMsg(""); }, [rid]);
   if (!d) return <Page title="Run">
     <Msg m={msg} />{!msg && <p className="mut">loading…</p>}</Page>;
   const { run: r, eval: ev, transcript, artifacts, failure } = d;
@@ -1288,9 +1289,9 @@ function RunDetail() {
             marginLeft: 8 }}>in={m.usage.input} out={m.usage.output}</span>}
           {m.role === "assistant" && m.tool_calls
             ? m.tool_calls.map((tc, j) => <div key={j}>
-                <b className="ok">→ {tc.function.name}</b>
+                <b className="ok">→ {tc.function?.name || "?"}</b>
                 <pre className="dump" style={{ marginTop: 2 }}>
-                  {tc.function.arguments.slice(0, 600)}</pre></div>)
+                  {(tc.function?.arguments || "").slice(0, 600)}</pre></div>)
             : <pre className="dump" style={{ marginTop: 2 }}>
                 {(m.content || "").slice(0, 3000)}</pre>}
         </div>))}
@@ -1517,7 +1518,7 @@ function DeepResearch() {
     {st && <div className="card">
       <code><b>{run.id}</b></code> <Pill v={st.status} />
       <span className="mut small"> model: {st.model}</span>
-      <div className="small mt">queries: {(st.plan.queries || [])
+      <div className="small mt">queries: {(st.plan?.queries || [])
         .join(" · ")}</div>
       {st.status !== "completed" && <div className="toolbar">
         <button className="primary" onClick={exec}>Run (bounded)</button>

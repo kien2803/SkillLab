@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .lab import Lab, LabError
+from .lab import Lab, LabError, check_id
 from .models import (EvalResult, RunRecord, SkillMeta, TaskSpec,
                      Variant, dump_yaml, load_yaml, parse_skill_ref)
 
@@ -34,7 +34,7 @@ CATEGORIES = [
 
 
 def _load_run(lab: Lab, run_id: str) -> tuple[RunRecord, Path]:
-    d = lab.runs_dir / run_id
+    d = lab.runs_dir / check_id("run", run_id)
     if not (d / "run.yaml").is_file():
         raise LabError(f"run '{run_id}' not found")
     return RunRecord(**load_yaml(d / "run.yaml")), d
@@ -198,8 +198,7 @@ def analyze_run(lab: Lab, run_id: str) -> dict:
     soft = {"missing-resource", "excessive-tokens", "missing-context"}
     infra = {"infrastructure", "evaluation-error"}
     if not causes:
-        verdict = "clean" if (ev is None or ev.status == "passed") \
-            else "clean"
+        verdict = "clean"
     elif all(c["category"] in infra for c in causes):
         verdict = "inconclusive"          # not the skill's fault
     elif all(c["category"] in soft for c in causes):
@@ -284,7 +283,7 @@ def proposals(report: dict) -> list[dict]:
 def write_report(lab: Lab, report: dict) -> Path:
     d = lab.d("failures")
     d.mkdir(exist_ok=True)
-    p = d / f"{report['run_id']}.yaml"
+    p = d / f"{check_id('run', report['run_id'])}.yaml"
     dump_yaml({**report, "proposals": proposals(report)}, p)
     return p
 
@@ -298,7 +297,8 @@ def candidate(lab: Lab, run_id: str, new_variant: str) -> Path:
     improvement plan travels with the candidate. The original variant
     is untouched."""
     import shutil as _sh
-    report = load_yaml(lab.d("failures") / f"{run_id}.yaml")
+    report = load_yaml(lab.d("failures")
+                       / f"{check_id('run', run_id)}.yaml")
     if not report:
         report = analyze_run(lab, run_id)
         report["proposals"] = proposals(report)
@@ -306,7 +306,7 @@ def candidate(lab: Lab, run_id: str, new_variant: str) -> Path:
     sid, vid = parse_skill_ref(report["skill_ref"])
     src = lab.variant_dir(sid, vid)
     sdir = lab.skills_dir / sid
-    dest = sdir / "variants" / new_variant
+    dest = sdir / "variants" / check_id("variant", new_variant)
     if dest.exists():
         raise LabError(f"variant '{new_variant}' already exists")
     _sh.copytree(src, dest)
