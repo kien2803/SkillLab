@@ -1,0 +1,34 @@
+run_id: exp-bp-demo--treatment--write-a-commit-message--r0
+experiment: exp-bp-demo
+arm: treatment
+task: write-a-commit-message
+skill_ref: demo-skill@v1
+injection_mode: available
+verdict: failed
+first_failure: &id001
+  category: evaluation-error
+  hypothesis: evaluation pipeline errored — check commands or judge calls failed,
+    not necessarily the task
+  evidence: 'eval.yaml: status=error'
+causes:
+- *id001
+- category: incorrect-activation
+  hypothesis: skill was offered but never activated on a task designed to trigger
+    it — weak trigger conditions or description
+  evidence: 'run.yaml: no ''activated'' skill_event on activation-positive task'
+proposals:
+- category: evaluation-error
+  problem: evaluation pipeline errored — check commands or judge calls failed, not
+    necessarily the task
+  evidence: 'eval.yaml: status=error'
+  change: re-run evaluation (`lab eval`) — the run itself may be fine; data gap only
+  expected_impact: eval.yaml exists with a real status
+  side_effects: none
+- category: incorrect-activation
+  problem: skill was offered but never activated on a task designed to trigger it
+    — weak trigger conditions or description
+  evidence: 'run.yaml: no ''activated'' skill_event on activation-positive task'
+  change: tighten `description` trigger wording — name the concrete situation ('use
+    when …') or narrow over-broad terms
+  expected_impact: higher activation precision on activation tasks
+  side_effects: too-narrow wording can reduce recall — re-run the activation suite

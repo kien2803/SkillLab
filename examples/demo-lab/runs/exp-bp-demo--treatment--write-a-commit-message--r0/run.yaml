@@ -1,0 +1,45 @@
+run_id: exp-bp-demo--treatment--write-a-commit-message--r0
+experiment: exp-bp-demo
+arm: treatment
+task: write-a-commit-message
+model:
+  name: mock
+  temperature: 0.0
+seed: 1168150693
+injection_mode: available
+skill_ref: demo-skill@v1
+skill_hash: sha256:5c4346cdd39765d9
+status: ok
+error: null
+started: '2026-11-20T15:23:37.240095+00:00'
+finished: '2026-11-20T15:23:37.241458+00:00'
+usage:
+  input_tokens: 410
+  output_tokens: 9
+  turns: 3
+skill_events:
+- t: 0
+  event: offered
+  skill: demo-skill
+  path: null
+- t: 0
+  event: offered
+  skill: code-review
+  path: null
+- t: 0
+  event: offered
+  skill: commit-helper
+  path: null
+- t: 0
+  event: offered
+  skill: diagnosing-bugs
+  path: null
+- t: 0
+  event: offered
+  skill: grill-with-docs
+  path: null
+- t: 1
+  event: activated
+  skill: code-review
+  path: null
+final_message: Done — wrote OUTPUT.md with the result.

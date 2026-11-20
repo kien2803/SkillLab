@@ -1,0 +1,9 @@
+id: write-a-commit-message
+kind: activation-positive
+prompt: prompt.md
+fixtures: []
+skill_relevance:
+  expected:
+  - demo-skill
+  unexpected: []
+deterministic_checks: []

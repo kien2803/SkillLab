@@ -1,0 +1,35 @@
+id: bp-demo
+title: bp-demo
+status: draft
+rev: 8
+fields:
+  name: demo-skill
+  description: Use when drafting conventional commit messages with a verification
+    checklist
+  research_motivation: ''
+  problem_statement: commit messages inconsistent
+  target_capability: structured commit drafting
+  target_users: []
+  use_cases: []
+  in_scope_tasks:
+  - write a commit message
+  out_of_scope_tasks: []
+  trigger_conditions:
+  - user asks to commit
+  preconditions: []
+  required_context: []
+  execution_workflow: []
+  decision_rules: []
+  tool_requirements: []
+  resource_requirements: []
+  output_contract: single conventional-commit line
+  error_handling: []
+  safety_constraints: []
+  known_limitations: []
+  verification_strategy: ''
+  evaluation_criteria: []
+  compatible_environments: []
+related_findings: []
+generated_variants: []
+created: '2026-11-20'
+updated: '2026-11-20'
