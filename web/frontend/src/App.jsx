@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Link, NavLink, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 
 const TOKEN_KEY = "skilllab_token";
 const tok = () => localStorage.getItem(TOKEN_KEY) || "";
@@ -210,6 +210,8 @@ function Experiments() {
   const [list, setList] = useState([]);
   const [msg, setMsg] = useState("");
   const [runs, setRuns] = useState([]);
+  const [cmp, setCmp] = useState({});
+  const [rep, setRep] = useState({});
   const load = () => {
     api("/experiments").then(setList).catch(() => {});
     api("/runs").then(setRuns).catch(() => {});
@@ -218,6 +220,14 @@ function Experiments() {
   const run = (id) =>
     api(`/experiments/${id}/run`, { method: "POST" })
       .then((r) => { setMsg(`${id}: ${r.count} runs`); load(); })
+      .catch((e) => setMsg(String(e)));
+  const compare = (id) =>
+    api(`/experiments/${id}/compare`)
+      .then((c) => setCmp({ ...cmp, [id]: c }))
+      .catch((e) => setMsg(String(e)));
+  const report = (id) =>
+    api(`/experiments/${id}/report`)
+      .then((r) => setRep({ ...rep, [id]: r.markdown }))
       .catch((e) => setMsg(String(e)));
   return <Page><h2>Experiment Lab</h2>
     {msg && <p style={{ color: "#8f8" }}>{msg}</p>}
@@ -228,11 +238,179 @@ function Experiments() {
         · tasks: {e.tasks.join(", ") || "—"}
         · rollouts: {e.rollouts_per_arm}
         · model: {e.fixed ? e.fixed.model : "?"}</div>
-      <button onClick={() => run(e.id)}>Run</button></div>)}
+      <button onClick={() => run(e.id)}>Run</button>
+      <button onClick={() => compare(e.id)} style={{ marginLeft: 6 }}>
+        Compare</button>
+      <button onClick={() => report(e.id)} style={{ marginLeft: 6 }}>
+        Report</button>
+      {cmp[e.id] && <table style={{ fontSize: 12, marginTop: 8,
+        borderCollapse: "collapse" }}>
+        <thead><tr><th style={th}>arm</th>
+          {cmp[e.id].tasks.map((t) => <th key={t} style={th}>{t}</th>)}</tr>
+        </thead>
+        <tbody>{cmp[e.id].arms.map((a) => <tr key={a.name}>
+          <td style={td}><b>{a.name}</b>
+            <span style={{ color: "#888" }}> {a.skill || "none"}</span></td>
+          {cmp[e.id].tasks.map((t) => {
+            const c = a.cells[t];
+            return <td key={t} style={td}>{c
+              ? `${c.mean.toFixed(2)}±${c.stdev.toFixed(2)} (n=${c.n})`
+              : "—"}</td>;})}
+        </tr>)}</tbody></table>}
+      {rep[e.id] && <pre style={{ fontSize: 11, whiteSpace: "pre-wrap",
+        maxHeight: 300, overflow: "auto", background: "#0a0c0f",
+        padding: 8, marginTop: 8 }}>{rep[e.id]}</pre>}
+    </div>)}
     <h3>Recent runs</h3>
     {runs.slice(-10).reverse().map((r) => (
       <div key={r.run_id} style={{ fontSize: 12 }}>
-        <code>{r.run_id}</code> [{r.status}] {r.skill_ref}</div>))}
+        <Link to={"/runs/" + r.run_id}><code>{r.run_id}</code></Link>
+        {" "} [{r.status}] {r.skill_ref}</div>))}
+  </Page>;
+}
+
+const th = { textAlign: "left", borderBottom: "1px solid #333",
+             padding: "2px 10px 2px 0" };
+const td = { padding: "2px 14px 2px 0", borderBottom: "1px solid #222" };
+
+function RunDetail() {
+  const { rid } = useParams();
+  const [d, setD] = useState(null);
+  const [art, setArt] = useState(null);
+  const [scores, setScores] = useState({});
+  const [msg, setMsg] = useState("");
+  const [showTr, setShowTr] = useState(false);
+  const load = () => api("/runs/" + rid).then(setD)
+    .catch((e) => setMsg(String(e)));
+  useEffect(load, [rid]);
+  if (!d) return <Page><p style={{ color: "#f88" }}>{msg || "loading…"}</p></Page>;
+  const { run: r, eval: ev, transcript, artifacts, failure } = d;
+  const humanPending = (ev?.checks || []).filter(
+    (c) => c.method === "human" && c.status === "pending");
+  const openArt = (p) =>
+    api(`/runs/${rid}/artifact?path=${encodeURIComponent(p)}`)
+      .then(setArt).catch((e) => setMsg(String(e)));
+  const score = () => {
+    const clean = Object.fromEntries(Object.entries(scores)
+      .filter(([, v]) => Number.isFinite(v)));
+    api(`/runs/${rid}/eval`,
+        { method: "POST",
+          body: JSON.stringify({ scores: clean, comments: {} }) })
+      .then(() => { setMsg("scores applied"); setScores({}); load(); })
+      .catch((e) => setMsg(String(e)));
+  };
+  const reeval = () =>
+    api(`/runs/${rid}/eval`,
+        { method: "POST", body: JSON.stringify({ scores: {} }) })
+      .then(() => { setMsg("re-evaluated"); load(); })
+      .catch((e) => setMsg(String(e)));
+  const stats = [["status", r.status],
+    ["eval", ev ? ev.status : "—"],
+    ["score", ev && ev.rubric_score != null
+      ? ev.rubric_score.toFixed(2) : "—"],
+    ["turns", r.usage?.turns],
+    ["tokens", (r.usage?.input_tokens || 0) + (r.usage?.output_tokens || 0)]];
+  return <Page>
+    <h2 style={{ fontSize: 16 }}><code>{r.run_id}</code></h2>
+    <p style={{ fontSize: 12, color: "#888" }}>
+      experiment {r.experiment} · arm {r.arm} · task {r.task} ·
+      model {r.model?.name} · mode {r.injection_mode} ·
+      skill {r.skill_ref || "none"}</p>
+    {msg && <p style={{ color: "#8f8" }}>{msg}</p>}
+    {r.error && <p style={{ color: "#f88" }}>run error: {r.error}</p>}
+    <div style={{ display: "flex", gap: 12 }}>
+      {stats.map(([k, v]) => <div key={k} style={{ ...card, margin: 0,
+        minWidth: 90 }}><div style={{ fontSize: 18 }}>{v ?? "—"}</div>
+        <div style={{ color: "#888", fontSize: 11 }}>{k}</div></div>)}
+    </div>
+    <h3>Evaluation</h3>
+    {ev ? <>
+      <table style={{ fontSize: 12, borderCollapse: "collapse" }}>
+        <thead><tr>{["criterion","method","status","score","judge",
+          "detail"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+        <tbody>{ev.checks.map((c) => <tr key={c.id}>
+          <td style={td}><b>{c.id}</b></td>
+          <td style={td}>{c.method}</td>
+          <td style={{ ...td,
+            color: c.status === "passed" ? "#8f8"
+              : c.status === "pending" ? "#aa5" : "#f88" }}>{c.status}</td>
+          <td style={td}>{c.score != null ? c.score.toFixed(2) : "—"}</td>
+          <td style={td}>{c.judge_model || "—"}</td>
+          <td style={td}>{(c.detail || "").slice(0, 120)}</td>
+        </tr>)}</tbody></table>
+      <div style={{ marginTop: 8 }}>
+        <button onClick={reeval}>Re-evaluate</button>
+        {ev.evaluated_at && <span style={{ color: "#888", fontSize: 11,
+          marginLeft: 8 }}>evaluated at {ev.evaluated_at}</span>}
+      </div>
+      {humanPending.length > 0 && <div style={{ ...card, marginTop: 8 }}>
+        <b>Human scoring</b>
+        {humanPending.map((c) => <div key={c.id} style={{ marginTop: 4 }}>
+          <label style={{ fontSize: 12 }}>{c.id}: </label>
+          <input type="number" step="0.5" min="0" style={{ width: 70,
+            background: "#0a0c0f", color: "#ddd",
+            border: "1px solid #333" }}
+            value={scores[c.id] ?? ""}
+            onChange={(e) => setScores({ ...scores,
+              [c.id]: parseFloat(e.target.value) })} />
+        </div>)}
+        <button onClick={score} style={{ marginTop: 6 }}
+          disabled={!Object.keys(scores).length}>Apply scores</button>
+      </div>}
+    </> : <p style={{ color: "#f88", fontSize: 12 }}>
+      no eval.yaml — evaluation missing or pending
+      <button onClick={reeval} style={{ marginLeft: 8 }}>Evaluate</button></p>}
+    {failure && <>
+      <h3>Failure analysis [{failure.verdict}]</h3>
+      <table style={{ fontSize: 12, borderCollapse: "collapse" }}>
+        <thead><tr>{["category","hypothesis","evidence"].map((h) =>
+          <th key={h} style={th}>{h}</th>)}</tr></thead>
+        <tbody>{(failure.causes || []).map((c, i) => <tr key={i}>
+          <td style={{ ...td, color: "#f88" }}>{c.category}</td>
+          <td style={td}>{(c.hypothesis || "").slice(0, 110)}</td>
+          <td style={{ ...td, color: "#888" }}>
+            {(c.evidence || "").slice(0, 80)}</td>
+        </tr>)}</tbody></table></>}
+    {r.skill_events?.length > 0 && <>
+      <h3>Skill events</h3>
+      <table style={{ fontSize: 12, borderCollapse: "collapse" }}>
+        <thead><tr>{["turn","event","skill","path"].map((h) =>
+          <th key={h} style={th}>{h}</th>)}</tr></thead>
+        <tbody>{r.skill_events.map((e, i) => <tr key={i}>
+          <td style={td}>{e.t}</td><td style={td}>{e.event}</td>
+          <td style={td}>{e.skill || "—"}</td>
+          <td style={td}>{e.path || "—"}</td>
+        </tr>)}</tbody></table></>}
+    {artifacts?.length > 0 && <>
+      <h3>Artifacts ({artifacts.length})</h3>
+      <ul style={{ fontSize: 12 }}>{artifacts.map((p) =>
+        <li key={p}><a href="#" onClick={() => openArt(p)}>
+          <code>{p}</code></a></li>)}</ul>
+      {art && <pre style={{ fontSize: 11, background: "#0a0c0f",
+        padding: 8, maxHeight: 240, overflow: "auto" }}>
+        <b>{art.path}</b>{"\n"}{art.text.slice(0, 8000)}</pre>}</>}
+    <h3><a href="#" onClick={() => setShowTr(!showTr)}
+      style={{ color: "#ddd" }}>Transcript {showTr ? "▾" : "▸"}
+      {transcript ? ` (${transcript.length})` : ""}</a></h3>
+    {showTr && (transcript || []).map((m, i) => (
+      <div key={i} style={{ fontSize: 12, margin: "6px 0",
+        borderLeft: "2px solid #333", paddingLeft: 8 }}>
+        <b style={{ color: m.role === "assistant" ? "#7aa2ff" : "#888" }}>
+          #{i} {m.role}{m.name ? ` [${m.name}]` : ""}</b>
+        {m.usage && <span style={{ color: "#666", fontSize: 10,
+          marginLeft: 8 }}>in={m.usage.input} out={m.usage.output}</span>}
+        {m.role === "assistant" && m.tool_calls
+          ? m.tool_calls.map((tc, j) => <div key={j}>
+              <b style={{ color: "#ad7" }}>→ {tc.function.name}</b>
+              <pre style={{ fontSize: 11, color: "#999", margin: "2px 0",
+                whiteSpace: "pre-wrap" }}>
+                {tc.function.arguments.slice(0, 600)}</pre></div>)
+          : <pre style={{ fontSize: 11, whiteSpace: "pre-wrap",
+              margin: "2px 0", color: "#bbb" }}>
+              {(m.content || "").slice(0, 3000)}</pre>}
+      </div>))}
+    {showTr && d.transcript_truncated &&
+      <p style={{ color: "#aa5", fontSize: 11 }}>transcript truncated</p>}
   </Page>;
 }
 
@@ -364,6 +542,7 @@ export default function App() {
     <Route path="/skills" element={<Skills />} />
     <Route path="/blueprints" element={<Blueprints />} />
     <Route path="/experiments" element={<Experiments />} />
+    <Route path="/runs/:rid" element={<RunDetail />} />
     <Route path="/proposals" element={<Proposals />} />
     <Route path="/failures" element={<Failures />} />
     <Route path="/releases" element={<Releases />} />

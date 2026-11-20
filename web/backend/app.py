@@ -412,25 +412,6 @@ def runs(l: Lab = Depends(lab)):
     return out[-100:]
 
 
-# ---- production: serve the built SPA from the same port -------------
-
-_DIST = Path(__file__).parent.parent / "frontend" / "dist"
-if _DIST.is_dir():
-    from fastapi.staticfiles import StaticFiles
-    from fastapi.responses import FileResponse
-
-    @app.get("/{path:path}", include_in_schema=False)
-    def spa_catchall(path: str):
-        if path.startswith("api/"):
-            raise HTTPException(404)
-        f = (_DIST / path).resolve()
-        if f.is_file() and _DIST in f.parents:
-            return FileResponse(f)
-        return FileResponse(_DIST / "index.html")  # client routing
-
-
-
-
 
 class NoteIn(BaseModel):
     title: str
@@ -552,3 +533,143 @@ def _safe_execute(l, pid, rd):
         deep.execute(l, pid, rd, log=lambda m: None)
     except Exception:
         pass
+
+
+# ---------------- run inspection + evaluation ----------------
+
+def _run_dir(l: Lab, rid: str) -> Path:
+    rd = l.runs_dir / rid
+    if not (rd / "run.yaml").is_file():
+        raise HTTPException(404, f"run '{rid}' not found")
+    return rd
+
+
+@app.get("/api/v1/runs/{rid}")
+def run_detail(rid: str, l: Lab = Depends(lab)):
+    """Full run detail: record + eval + transcript + artifacts + any
+    persisted failure analysis. Read-only — mirrors `lab ui` run pages."""
+    import json
+    from skilllab.models import EvalResult, RunRecord, load_yaml
+    rd = _run_dir(l, rid)
+    rec = RunRecord(**load_yaml(rd / "run.yaml"))
+    out = {"run": rec.model_dump(mode="json")}
+    ey = rd / "eval.yaml"
+    if ey.is_file():
+        out["eval"] = EvalResult(**load_yaml(ey)).model_dump(mode="json")
+    tp = rd / "transcript.jsonl"
+    if tp.is_file():
+        msgs = []
+        for line in tp.read_text().splitlines():
+            try:
+                msgs.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+            if len(msgs) >= 500:
+                out["transcript_truncated"] = True
+                break
+        out["transcript"] = msgs
+    ws = rd / "workspace"
+    if ws.is_dir():
+        out["artifacts"] = sorted(
+            str(p.relative_to(ws)) for p in ws.rglob("*") if p.is_file())
+    frep = l.d("failures") / f"{rid}.yaml"
+    if frep.is_file():
+        out["failure"] = load_yaml(frep)
+    return out
+
+
+@app.get("/api/v1/runs/{rid}/artifact")
+def run_artifact(rid: str, path: str, l: Lab = Depends(lab)):
+    rd = _run_dir(l, rid)
+    ws = (rd / "workspace").resolve()
+    f = (ws / path).resolve()
+    if not f.is_file() or f == ws or ws not in f.parents:
+        raise HTTPException(404, "artifact not found")
+    if f.stat().st_size > 200_000:
+        raise HTTPException(413, "artifact >200KB")
+    return {"path": path, "text": f.read_text(errors="replace")}
+
+
+class EvalIn(BaseModel):
+    scores: dict[str, float] = {}
+    comments: dict[str, str] = {}
+
+
+@app.post("/api/v1/runs/{rid}/eval", dependencies=[Depends(auth)])
+def run_eval(rid: str, body: EvalIn, l: Lab = Depends(lab)):
+    """`lab eval` over HTTP: scores present -> fill human criteria and
+    recompute; empty -> re-run deterministic/judge checks."""
+    from skilllab.evaluate import apply_human_scores, evaluate_run
+    from skilllab.models import RunRecord, load_yaml
+    rd = _run_dir(l, rid)
+    rec = RunRecord(**load_yaml(rd / "run.yaml"))
+    try:
+        task = l.task(rec.task)
+        ev = (apply_human_scores(l, rec, task, rd, body.scores,
+                                 body.comments)
+              if body.scores else evaluate_run(l, rec, task, rd))
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return ev.model_dump(mode="json")
+
+
+@app.get("/api/v1/experiments/{eid}/compare")
+def exp_compare(eid: str, l: Lab = Depends(lab)):
+    """Structured arm x task score matrix — same data as
+    `lab compare`, shaped for tables instead of markdown."""
+    import statistics
+    from skilllab.report import load_runs
+    try:
+        exp = l.experiment(eid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    cells: dict[tuple[str, str], list[float]] = {}
+    tasks: list[str] = []
+    for rec, ev in load_runs(l, eid):
+        if rec.status == "error" or not ev \
+                or ev.status not in ("passed", "failed"):
+            continue
+        s = ev.rubric_score if ev.rubric_score is not None else (
+            1.0 if ev.status == "passed" else 0.0)
+        cells.setdefault((rec.arm, rec.task), []).append(s)
+        if rec.task not in tasks:
+            tasks.append(rec.task)
+    arms = []
+    for a in exp.arms:
+        row = {"name": a.name, "skill": a.skill, "cells": {}}
+        for t in tasks:
+            xs = cells.get((a.name, t), [])
+            if xs:
+                row["cells"][t] = {
+                    "n": len(xs), "mean": statistics.mean(xs),
+                    "stdev": statistics.pstdev(xs) if len(xs) > 1 else 0.0}
+        arms.append(row)
+    return {"experiment": eid, "tasks": tasks, "arms": arms}
+
+
+@app.get("/api/v1/experiments/{eid}/report")
+def exp_report(eid: str, l: Lab = Depends(lab)):
+    from skilllab.report import build_report
+    try:
+        exp = l.experiment(eid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return {"experiment": eid, "markdown": build_report(l, exp)}
+
+
+# ---- production: serve the built SPA from the same port -------------
+# NOTE: must stay LAST — a `/{path:path}` GET registered earlier would
+# shadow every /api/v1 GET route defined below it.
+
+_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+if _DIST.is_dir():
+    from fastapi.responses import FileResponse
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa_catchall(path: str):
+        if path.startswith("api/"):
+            raise HTTPException(404)
+        f = (_DIST / path).resolve()
+        if f.is_file() and _DIST in f.parents:
+            return FileResponse(f)
+        return FileResponse(_DIST / "index.html")  # client routing
