@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 from .lab import Lab, LabError, check_id
-from .models import load_yaml, parse_frontmatter
+from .models import EvalResult, load_yaml, parse_frontmatter
 
 TEMPLATE = """---
 id: {iid}
@@ -83,19 +83,57 @@ def _set_status(lab: Lab, insight_id: str, status: str) -> Path:
     raise LabError(f"Insight '{insight_id}' not found.")
 
 
+def _evidence_usable(lab: Lab, ref: str) -> bool:
+    """A ref is usable evidence only when it carries a *completed*
+    evaluation — an experiment/run that exists but was never evaluated
+    (or errored) cannot confirm anything."""
+    ref = str(ref)
+
+    def _evaluated(d: Path) -> bool:
+        ey = d / "eval.yaml"
+        if not ey.is_file():
+            return False
+        try:                        # EvalResult backfills legacy status
+            return EvalResult(**load_yaml(ey)).status in (
+                "passed", "failed")
+        except Exception:
+            return False
+
+    ry = lab.runs_dir / ref / "run.yaml"
+    if ry.is_file():
+        return _evaluated(lab.runs_dir / ref)
+    if (lab.experiments_dir / ref / "experiment.yaml").is_file():
+        for d in lab.runs_dir.iterdir() if lab.runs_dir.is_dir() else []:
+            r = d / "run.yaml"
+            if not r.is_file() or load_yaml(r).get("experiment") != ref:
+                continue
+            if _evaluated(d):
+                return True
+    return False
+
+
 def confirm(lab: Lab, insight_id: str) -> Path:
-    """Mark an insight confirmed — requires at least one valid evidence ref."""
+    """Mark an insight confirmed — requires candidate status + at least
+    one evidence ref with completed evaluation results."""
     check_id("insight", insight_id)
     for d in (lab.insights_dir, lab.principles_dir):
         p = d / f"{insight_id}.md"
         if p.is_file():
             fm, _ = parse_frontmatter(p.read_text())
+            if fm.get("status") not in ("candidate", None):
+                raise LabError(
+                    f"insight '{insight_id}' is '{fm.get('status')}' — "
+                    "only candidate insights can be confirmed")
             ev = fm.get("evidence") or []
             if isinstance(ev, str):
                 ev = [ev]
             if not _evidence_experiments(lab, ev):
                 raise LabError(f"insight '{insight_id}' has no valid "
                                "experiment/run evidence to confirm")
+            if not any(_evidence_usable(lab, r) for r in ev):
+                raise LabError(
+                    f"insight '{insight_id}' evidence has no completed "
+                    "evaluations — run + evaluate before confirming")
             return _set_status(lab, insight_id, "confirmed")
     raise LabError(f"Insight '{insight_id}' not found.")
 
@@ -135,7 +173,14 @@ def promote(lab: Lab, insight_id: str) -> Path:
     src = lab.insights_dir / f"{check_id('insight', insight_id)}.md"
     if not src.is_file():
         raise LabError(f"Insight '{insight_id}' not found.")
+    if (lab.principles_dir / src.name).exists():
+        raise LabError(f"principle '{src.stem}' already exists — refusing "
+                       "to overwrite")   # checked before any status gate
     fm, body = parse_frontmatter(src.read_text())
+    if fm.get("status") != "confirmed":
+        raise LabError(
+            f"insight '{insight_id}' is '{fm.get('status')}' — "
+            "confirm it first (`lab insight confirm`)")
     ev = fm.get("evidence") or []
     if isinstance(ev, str):
         ev = [ev]
@@ -151,9 +196,6 @@ def promote(lab: Lab, insight_id: str) -> Path:
         raise LabError("insight still contains TODO placeholders — finish "
                        "the statement/conditions/counter-evidence sections")
     dest = lab.principles_dir / src.name
-    if dest.exists():
-        raise LabError(f"principle '{dest.stem}' already exists — refusing "
-                       "to overwrite")
     fm["status"] = "promoted"
     fm["promoted_at"] = date.today().isoformat()
     dest.write_text("---\n" + yaml.safe_dump(fm, sort_keys=False,

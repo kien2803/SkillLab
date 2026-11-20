@@ -13,3 +13,10 @@ __pycache__/
 
 node_modules
 test-results/
+
+# generated artifacts
+web/frontend/dist/
+playwright-report/
+exports/
+jobs/
+*.packtmp

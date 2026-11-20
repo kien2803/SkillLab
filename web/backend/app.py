@@ -6,6 +6,7 @@ Business logic lives in skilllab/* — routes only serialize it.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -98,16 +99,110 @@ from fastapi import Header
 from pydantic import BaseModel
 
 _TOKEN = os.environ.get("SKILLLAB_TOKEN", "")
+_ENV = os.environ.get("SKILLLAB_ENV", "development").lower()
 if not _TOKEN:
+    if _ENV == "production":
+        raise RuntimeError(
+            "SKILLLAB_TOKEN is required in production — refusing to "
+            "start with an auto-generated credential")
     _TOKEN = secrets.token_urlsafe(24)
     import sys
     print(f"[skilllab-web] dev token (set SKILLLAB_TOKEN to fix): "
           f"{_TOKEN}", file=sys.stderr)
+_REQUIRE = f"Bearer {_TOKEN}"
+
+
+def _ok(header: str) -> bool:
+    # constant-time compare on the full header value
+    return secrets.compare_digest(header.encode(), _REQUIRE.encode())
 
 
 def auth(authorization: str = Header(default="")) -> None:
-    if authorization != f"Bearer {_TOKEN}":
+    if not _ok(authorization):
         raise HTTPException(401, "missing/invalid bearer token")
+
+
+# ---- global guards -------------------------------------------------
+# every /api/* route requires the bearer token (incl. GET streams);
+# only the health probe stays open for Docker/monitors.
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+_PUBLIC = {"/api/v1/health"}
+
+
+@app.middleware("http")
+async def guards(request: Request, call_next):
+    p = request.url.path
+    if p.startswith("/api/") and p not in _PUBLIC:
+        if not _ok(request.headers.get("authorization", "")):
+            return JSONResponse({"detail": "missing/invalid bearer token"},
+                                status_code=401)
+        if len(p) > 2048:
+            return JSONResponse({"detail": "url too long"}, 414)
+        rl = _rate_limit(request)
+        if rl is not None:
+            return rl
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    if p.startswith("/api/"):
+        resp.headers.setdefault("Cache-Control", "no-store")
+    return resp
+
+
+# simple fixed-window rate limiter for expensive endpoints (per-token
+# isn't meaningful here — single-user lab; bound global concurrency)
+import threading, time as _time
+
+_RL = {"lock": threading.Lock(), "buckets": {}}
+_RL_RULES = {                       # prefix -> (max_calls, window_s)
+    "/api/v1/web-search": (10, 60),
+    "/api/v1/web-fetch": (10, 60),
+    "/api/v1/research/": (4, 60),          # deep-research streams
+    "/api/v1/skills/import": (6, 60),
+    "/api/v1/import": (6, 60),
+}
+_RL_DEFAULT_RUN = (12, 60)          # experiment run/retry POSTs
+
+
+def _rate_limit(request: Request):
+    if request.method != "POST":
+        return None
+    p = request.url.path
+    cap = None
+    for prefix, rule in _RL_RULES.items():
+        if p.startswith(prefix):
+            cap = rule
+            break
+    if cap is None and ("/run" in p or p.endswith("/proposals")):
+        cap = _RL_DEFAULT_RUN
+    if cap is None:
+        return None
+    now = _time.monotonic()
+    key = p.split("?")[0]
+    with _RL["lock"]:
+        n, t0 = _RL["buckets"].get(key, (0, now))
+        if now - t0 > cap[1]:
+            n, t0 = 0, now
+        if n >= cap[0]:
+            return JSONResponse(
+                {"detail": "rate limited — retry later"}, 429)
+        _RL["buckets"][key] = (n + 1, t0)
+    return None
+
+
+# CORS — same-origin SPA needs none; dev uses the vite proxy. Origins
+# are explicit, never "*", and only when SKILLLAB_CORS_ORIGINS is set.
+from fastapi.middleware.cors import CORSMiddleware
+_origins = [o.strip() for o in os.environ.get(
+    "SKILLLAB_CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=_origins,
+                   allow_methods=["GET", "POST", "PUT", "DELETE"],
+                   allow_headers=["authorization", "content-type"],
+                   max_age=600)
 
 
 class ProjectIn(BaseModel):
@@ -237,6 +332,91 @@ def preview(ref: str, l: Lab = Depends(lab)):
 def check(ref: str, l: Lab = Depends(lab)):
     from skilllab import studio
     return studio.validate_skill(l, ref)
+
+
+# ---------------- skill file editor (Skill Studio) -----------------
+
+def _variant_file(l: Lab, ref: str, rel: str) -> Path:
+    """Resolve a file inside a variant dir — both segments contained."""
+    from skilllab.models import parse_skill_ref
+    sid, vid = parse_skill_ref(ref)
+    vdir = l.variant_dir(sid, vid).resolve()
+    p = (vdir / rel).resolve()
+    if not p.is_relative_to(vdir) or p.is_symlink():
+        raise HTTPException(400, "path escapes the variant dir")
+    return p
+
+
+def _vdir(l: Lab, ref: str) -> Path:
+    from skilllab.models import parse_skill_ref
+    sid, vid = parse_skill_ref(ref)
+    return l.variant_dir(sid, vid).resolve()
+
+
+@app.get("/api/v1/skills/{ref}/files")
+def skill_files(ref: str, l: Lab = Depends(lab)):
+    """File tree for the in-browser editor: path/size/sha per file."""
+    import hashlib
+    vdir = _vdir(l, ref)
+    out = []
+    for p in sorted(vdir.rglob("*")):
+        if p.is_file() and not p.is_symlink() \
+                and "revisions" not in p.relative_to(vdir).parts:
+            out.append({"path": str(p.relative_to(vdir)),
+                        "bytes": p.stat().st_size,
+                        "sha": hashlib.sha256(
+                            p.read_bytes()).hexdigest()[:12]})
+    return {"variant": ref, "files": out}
+
+
+@app.get("/api/v1/skills/{ref}/file")
+def skill_file_read(ref: str, path: str, l: Lab = Depends(lab)):
+    import hashlib
+    p = _variant_file(l, ref, path)
+    if not p.is_file():
+        raise HTTPException(404, "file not found")
+    raw = p.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(415, "binary file — not editable")
+    return {"path": path, "text": text,
+            "sha": hashlib.sha256(raw).hexdigest()[:12]}
+
+
+class FileWriteIn(BaseModel):
+    path: str
+    text: str
+    base_sha: str = ""               # optimistic concurrency check
+
+
+@app.put("/api/v1/skills/{ref}/file", dependencies=[Depends(auth)])
+def skill_file_write(ref: str, body: FileWriteIn, l: Lab = Depends(lab)):
+    """Save a variant file. `base_sha` must match the current hash —
+    a stale buffer never silently overwrites someone else's edit.
+    Every write snapshots the previous content under revisions/."""
+    import hashlib
+    from datetime import datetime
+    p = _variant_file(l, ref, body.path)
+    if len(body.text.encode()) > 2_000_000:
+        raise HTTPException(413, "file >2MB")
+    old = p.read_bytes() if p.exists() else None
+    cur = hashlib.sha256(old).hexdigest()[:12] if old else ""
+    if body.base_sha != cur:
+        raise HTTPException(
+            409, f"stale buffer — file changed (have {cur or 'none'}, "
+            f"sent {body.base_sha or 'none'}); reload and retry")
+    if old is not None:
+        rev = _vdir(l, ref) / "revisions" / (
+            datetime.now().strftime("%Y%m%d-%H%M%S") + "-" +
+            body.path.replace("/", "__"))
+        rev.parent.mkdir(parents=True, exist_ok=True)
+        rev.write_bytes(old)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body.text)
+    return {"path": body.path,
+            "sha": hashlib.sha256(p.read_bytes()).hexdigest()[:12],
+            "revision": old is not None}
 
 
 @app.post("/api/v1/skills/{ref}/proposals", dependencies=[Depends(auth)])
@@ -532,12 +712,8 @@ def dr_stream(pid: str, rid: str, l: Lab = Depends(lab)):
     if not (rd / "run.yaml").is_file():
         raise HTTPException(404, "research run not found")
 
+    # GET streams only OBSERVE — execution starts via POST .../run
     st = deep.get(rd)
-    if st["status"] in ("planned", "approved", "failed"):
-        deep.approve(rd)
-        threading.Thread(
-            target=lambda: _safe_execute(l, pid, rd),
-            daemon=True).start()
 
     def gen():
         last = ""
@@ -564,6 +740,64 @@ def _safe_execute(l, pid, rd):
         deep.execute(l, pid, rd, log=lambda m: None)
     except Exception:
         pass
+
+
+@app.post("/api/v1/research/{pid}/{rid}/run", dependencies=[Depends(auth)])
+def deep_run_start(pid: str, rid: str, l: Lab = Depends(lab)):
+    """Start (or resume) a research run through the job queue — one
+    active job per run dir, resumable via deep's persisted state."""
+    from skilllab import deep
+    from skilllab.lab import check_id
+    rd = deep.runs_dir(l, pid) / check_id("run", rid)
+    if not (rd / "run.yaml").is_file():
+        raise HTTPException(404, "research run not found")
+    st = deep.get(rd)
+    if st["status"] == "completed":
+        return {"id": rid, "status": "completed", "job": None}
+    if st["status"] in ("planned", "failed"):
+        deep.approve(rd)
+
+    def work(job):
+        deep.execute(l, pid, rd, log=job.log)
+    j = _jobs(l).submit("deep-research", f"{pid}/{rid}", work)
+    return {"id": rid, "status": "running", "job": j["id"]}
+
+
+# ---------------- background jobs ----------------
+
+def _jobs(l: Lab):
+    """Lazily-created per-lab job store (SQLite under <lab>/jobs/)."""
+    global _JOB_STORES
+    try:
+        _JOB_STORES
+    except NameError:
+        _JOB_STORES = {}
+    k = str(l.root)
+    if k not in _JOB_STORES:
+        from .jobs import Jobs
+        _JOB_STORES[k] = Jobs(l.d("jobs") / "jobs.sqlite")
+    return _JOB_STORES[k]
+
+
+@app.get("/api/v1/jobs")
+def jobs_list(l: Lab = Depends(lab)):
+    return _jobs(l).list()
+
+
+@app.get("/api/v1/jobs/{jid}")
+def jobs_get(jid: str, l: Lab = Depends(lab)):
+    j = _jobs(l).get(jid)
+    if not j:
+        raise HTTPException(404, "job not found")
+    return j
+
+
+@app.post("/api/v1/jobs/{jid}/cancel", dependencies=[Depends(auth)])
+def jobs_cancel(jid: str, l: Lab = Depends(lab)):
+    j = _jobs(l).get(jid)
+    if not j:
+        raise HTTPException(404, "job not found")
+    return _jobs(l).cancel(jid)
 
 
 # ---------------- run inspection + evaluation ----------------
@@ -1132,14 +1366,27 @@ def skill_new(body: SkillIn, l: Lab = Depends(lab)):
 
 
 class ImportIn(BaseModel):
-    src: str                         # local path or git URL[#subdir]
+    src: str                         # git URL[#subdir] or lab-relative dir
+
+
+def _lab_path(l: Lab, s: str, base: str) -> Path:
+    """Resolve a lab-relative import path — the web never accepts
+    arbitrary server paths, only dirs under <lab>/<base>/."""
+    cand = (l.d(base) / s).resolve()
+    if not cand.is_relative_to(l.d(base).resolve()) or not cand.is_dir():
+        raise HTTPException(
+            400, f"path must be a directory under <lab>/{base}/")
+    return cand
 
 
 @app.post("/api/v1/skills/import", dependencies=[Depends(auth)])
 def skill_import(body: ImportIn, l: Lab = Depends(lab)):
     from skilllab.registry import add_skill
+    src = body.src
+    if not re.match(r"^(https://|ssh://|git@|git://)", src):
+        src = str(_lab_path(l, src, "imports"))   # staged imports only
     try:
-        d = add_skill(l, body.src)
+        d = add_skill(l, src)
     except LabError as e:
         raise HTTPException(409, str(e))
     return {"path": str(d)}
@@ -1510,17 +1757,29 @@ def export_pack(body: ExportIn, l: Lab = Depends(lab)):
 
 
 class ImportPackIn(BaseModel):
-    src: str                         # server-side pack dir
+    src: str                         # dir name under <lab>/exports/
     force: bool = False
 
 
 @app.post("/api/v1/import", dependencies=[Depends(auth)])
 def import_pack(body: ImportPackIn, l: Lab = Depends(lab)):
-    """Import a share pack — manifest-validated, traversal-safe
-    (same checks as `lab import`)."""
+    """Import a share pack — packs live under <lab>/exports/ (from
+    `lab export`) or <lab>/imports/ (staged); arbitrary server paths
+    are not accepted over HTTP."""
     from skilllab.share import import_pack as do_import
+    src = None
+    for base in ("exports", "imports"):
+        try:
+            src = _lab_path(l, body.src, base)
+            break
+        except HTTPException:
+            continue
+    if src is None:
+        raise HTTPException(
+            400, "pack must be a directory under <lab>/exports/ "
+            "or <lab>/imports/")
     try:
-        res = do_import(l, Path(body.src), body.force)
+        res = do_import(l, src, body.force)
     except LabError as e:
         raise HTTPException(409, str(e))
     return res

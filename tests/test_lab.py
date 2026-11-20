@@ -757,6 +757,7 @@ def test_import_pack_hardening(lab, tmp_path):
     res = import_pack(lab, pack)
     assert res["rejected"]  # bad task.yaml + symlink
     assert not (lab.insights_dir / "link.md").exists()
+    assert not (lab.insights_dir / "ok.md.packtmp").exists()
     # unsupported manifest entry -> whole pack refused
     dump_yaml({"kind": "skilllab-pack", "version": 1,
                "contents": ["../../etc"]}, pack / "pack.yaml")
@@ -770,8 +771,9 @@ def test_import_pack_hardening(lab, tmp_path):
 
 
 def test_insight_promotion_gating(lab, tmp_path):
-    from skilllab.insights import promote
-    # no evidence -> rejected
+    from skilllab.insights import confirm, promote
+    from skilllab.models import dump_yaml
+    # promotion requires confirmed status first
     (lab.insights_dir / "i1.md").write_text("""\
 ---
 id: i1
@@ -779,10 +781,16 @@ scope: trigger wording
 ---
 Statement. Conditions. Evidence section complete, no placeholders.
 """)
-    with pytest.raises(Exception, match="2 independent"):
+    with pytest.raises(Exception, match="confirm it first"):
         promote(lab, "i1")
+    # confirm needs usable evidence — i1 has none
+    with pytest.raises(Exception, match="no valid"):
+        confirm(lab, "i1")
     # two runs from the SAME experiment are not independent evidence
     recs = run_experiment(lab, "exp-test-trigger", limit=2)
+    for rec in recs:   # confirmation requires completed evaluations
+        dump_yaml({"checks": [], "status": "passed", "success": True},
+                  lab.runs_dir / rec.run_id / "eval.yaml")
     (lab.insights_dir / "i2.md").write_text(f"""\
 ---
 id: i2
@@ -791,6 +799,7 @@ scope: trigger wording
 ---
 Statement. Conditions. Complete.
 """)
+    confirm(lab, "i2")
     with pytest.raises(Exception, match="2 independent"):
         promote(lab, "i2")
     # second experiment dir -> now promotes
@@ -805,6 +814,7 @@ scope: trigger wording
 ---
 Statement. Conditions. Complete.
 """)
+    confirm(lab, "i3")
     dest = promote(lab, "i3")
     assert dest.parent == lab.principles_dir
     assert "promoted_at" in dest.read_text()
@@ -822,17 +832,25 @@ scope: x
 ---
 TODO: write the actual statement
 """)
+    confirm(lab, "i4")
     with pytest.raises(Exception, match="TODO"):
         promote(lab, "i4")
 
 
 def test_insight_confirm_requires_evidence(lab):
     from skilllab.insights import confirm
+    from skilllab.models import dump_yaml
     (lab.insights_dir / "c1.md").write_text("---\nid: c1\n---\nbody\n")
     with pytest.raises(Exception, match="no valid"):
         confirm(lab, "c1")
     (lab.insights_dir / "c1.md").write_text(
         "---\nid: c1\nevidence: [exp-test-trigger]\n---\nbody\n")
+    # a run exists but was never evaluated -> still not confirmable
+    recs = run_experiment(lab, "exp-test-trigger", limit=1)
+    with pytest.raises(Exception, match="no completed"):
+        confirm(lab, "c1")
+    dump_yaml({"checks": [], "status": "passed", "success": True},
+              lab.runs_dir / recs[0].run_id / "eval.yaml")
     p = confirm(lab, "c1")
     assert "confirmed" in p.read_text()
 

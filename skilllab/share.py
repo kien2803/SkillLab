@@ -70,12 +70,14 @@ def import_pack(lab: Lab, src: Path, force: bool = False) -> dict:
         raise LabError(f"pack lists unsupported/unsafe entries: "
                        f"{', '.join(bad)}")
 
+    # phase 1 — validate everything, build the apply plan. Nothing is
+    # written until every entry has passed its checks.
     res: dict = {"imported": {}, "skipped": [], "rejected": []}
+    plan: list[tuple[Path, Path, str]] = []   # (src, dest, dir)
     for d in contents:
         base = src / d
         if not base.is_dir():
             continue
-        n = 0
         for p in sorted(base.rglob("*")):
             rel = p.relative_to(base)
             if p.is_symlink():
@@ -84,7 +86,6 @@ def import_pack(lab: Lab, src: Path, force: bool = False) -> dict:
             if not p.is_file():
                 continue
             dest = lab.d(d) / rel
-            # resolved destination must stay inside the target dir
             try:
                 inside = dest.resolve().is_relative_to(
                     lab.d(d).resolve())
@@ -103,8 +104,32 @@ def import_pack(lab: Lab, src: Path, force: bool = False) -> dict:
             if dest.exists() and not force:
                 res["skipped"].append(str(dest.relative_to(lab.root)))
                 continue
+            plan.append((p, dest, d))
+
+    # phase 2 — stage every file under a temp name, then commit with
+    # os.replace; a mid-apply failure rolls back what was written.
+    import os
+    staged: list[tuple[Path, Path]] = []       # (tmp, dest)
+    applied: list[tuple[Path, bytes | None]] = []  # (dest, old bytes)
+    try:
+        for p, dest, _d in plan:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(p, dest)
-            n += 1
-        res["imported"][d] = n
+            tmp = dest.with_name(dest.name + ".packtmp")
+            shutil.copy2(p, tmp)
+            staged.append((tmp, dest))
+        for tmp, dest in staged:
+            old = dest.read_bytes() if dest.exists() else None
+            os.replace(tmp, dest)
+            applied.append((dest, old))
+    except Exception as e:
+        for dest, old in applied:
+            if old is None:
+                dest.unlink(missing_ok=True)
+            else:
+                dest.write_bytes(old)
+        for tmp, _dest in staged:
+            tmp.unlink(missing_ok=True)
+        raise LabError(f"import failed mid-apply, rolled back: {e}")
+    for _p, _dest, d in plan:
+        res["imported"][d] = res["imported"].get(d, 0) + 1
     return res

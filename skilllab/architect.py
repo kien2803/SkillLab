@@ -132,6 +132,7 @@ def suggest(lab: Lab, ref: str, use_llm: bool = False) -> list[Proposal]:
         patches = _llm_proposals(lab, ref, findings)
         out = []
         for patch in patches:
+            _record_base(vdir, patch)
             p = Proposal(
                 id=_next_id(lab), skill=sid, variant=vid or "",
                 finding=f"llm-review ({lab.cfg.get('model')})",
@@ -147,6 +148,7 @@ def suggest(lab: Lab, ref: str, use_llm: bool = False) -> list[Proposal]:
         patch = _patches_for(f, vdir)
         if not patch:
             continue
+        _record_base(vdir, patch)
         p = Proposal(
             id=_next_id(lab), skill=sid, variant=vid or "",
             finding=f"{f.check}: {f.message}", patch=patch,
@@ -185,17 +187,27 @@ def _entry(vdir: Path) -> Path | None:
     return None
 
 
-def _patched_content(vdir: Path, patch: dict) -> tuple[str, str] | None:
-    """Return (old_text, new_text) for the patch's target file."""
+def _patched_files(vdir: Path, patch: dict) -> list[dict] | None:
+    """Pure computation of a patch's file changes.
+
+    Returns [{file, old, new}] — `old` is None for files the patch
+    creates. NEVER touches the filesystem: preview, apply and hashing
+    all read from this single source of truth."""
     src = (vdir / patch["file"]).resolve()
-    if not src.is_relative_to(vdir.resolve()) or not src.is_file():
+    if not src.is_relative_to(vdir.resolve()):
         return None
-    old = src.read_text()
+    old = src.read_text() if src.is_file() else None
+    changes: list[dict] = []
     if patch["type"] == "unlink":
+        if old is None:
+            return None
         new = old.replace(f"`{patch['target']}`", patch["target"])
         new = re.sub(r"\[([^\]]*)\]\(" + re.escape(patch["target"]) + r"\)",
                      r"\1", new)
+        changes.append({"file": patch["file"], "old": old, "new": new})
     elif patch["type"] == "description-trigger":
+        if old is None:
+            return None
         lines = old.splitlines()
         for i, ln in enumerate(lines):
             if ln.startswith("description:"):
@@ -205,36 +217,62 @@ def _patched_content(vdir: Path, patch: dict) -> tuple[str, str] | None:
                                 f"  Use when {desc[0].lower() + desc[1:]}")
                 break
         new = "\n".join(lines) + ("\n" if old.endswith("\n") else "")
+        changes.append({"file": patch["file"], "old": old, "new": new})
     elif patch["type"] == "extract-resources":
-        heads = [m.start() for m in
-                 re.finditer(r"\n## ", old)]
+        if old is None:
+            return None
+        heads = [m.start() for m in re.finditer(r"\n## ", old)]
         if len(heads) < 2:
             return None
         core, tail = old[:heads[-1]], old[heads[-1]:]
-        new = core + ("\nFurther detail: `resources/detail.md`\n")
-        (vdir / "resources").mkdir(exist_ok=True)
-        (vdir / "resources" / "detail.md").write_text(
-            "# Detail\n" + tail)
-        return old, new
+        new = core + "\nFurther detail: `resources/detail.md`\n"
+        res_rel = "resources/detail.md"
+        res_old = ((vdir / res_rel).read_text()
+                   if (vdir / res_rel).is_file() else None)
+        changes.append({"file": patch["file"], "old": old, "new": new})
+        changes.append({"file": res_rel, "old": res_old,
+                        "new": "# Detail\n" + tail})
     elif patch["type"] == "rewrite":
         if not patch.get("content"):
             return None
-        return old, patch["content"]
+        changes.append({"file": patch["file"], "old": old,
+                        "new": patch["content"]})
     else:
         return None
-    return old, new
+    return changes or None
+
+
+def _sha(text: str | None) -> str | None:
+    import hashlib
+    return hashlib.sha256(text.encode()).hexdigest()[:16] \
+        if text is not None else None
+
+
+def _record_base(vdir: Path, patch: dict) -> None:
+    """Snapshot sha256 of every file the patch touches so `apply` can
+    reject the proposal when the target drifted since preview."""
+    base = {}
+    for ch in (_patched_files(vdir, patch) or []):
+        p = (vdir / ch["file"]).resolve()
+        base[ch["file"]] = _sha(
+            p.read_text() if p.is_file() else None)
+    patch["base"] = base
 
 
 def preview(lab: Lab, p: Proposal) -> str:
+    """Read-only diff of everything the patch would change."""
     vdir = _variant_dir(lab, f"{p.skill}@{p.variant}")
-    res = _patched_content(vdir, p.patch)
-    if not res:
+    changes = _patched_files(vdir, p.patch)
+    if not changes:
         return "(no textual diff — new file or unsupported patch)"
-    old, new = res
     import difflib
-    return "".join(difflib.unified_diff(
-        old.splitlines(True), new.splitlines(True),
-        fromfile=f"a/{p.patch['file']}", tofile=f"b/{p.patch['file']}"))
+    out = []
+    for ch in changes:
+        old = ch["old"] or ""
+        out.append("".join(difflib.unified_diff(
+            old.splitlines(True), ch["new"].splitlines(True),
+            fromfile=f"a/{ch['file']}", tofile=f"b/{ch['file']}")))
+    return "".join(out)
 
 
 def set_status(lab: Lab, pid: str, status: str) -> None:
@@ -245,24 +283,72 @@ def set_status(lab: Lab, pid: str, status: str) -> None:
     dump_yaml(p.model_dump(mode="json"), path)
 
 
-def apply(lab: Lab, pid: str) -> Path:
-    """Apply an approved proposal. Keeps the original file content in
-    the record for audit/rollback. Never applies unapproved work."""
+def apply(lab: Lab, pid: str) -> list[Path]:
+    """Write an approved proposal's file changes.
+
+    Every target file's sha256 recorded at suggest-time must still
+    match — a stale proposal is rejected instead of silently clobbering
+    newer content. Original contents are kept in the record for
+    `rollback`; files created by the patch are recorded too."""
     p, path = get(lab, pid)
     if p.status != "approved":
         raise LabError(f"proposal '{pid}' is '{p.status}' — approve "
                        "first (`lab ai approve`)")
     vdir = _variant_dir(lab, f"{p.skill}@{p.variant}")
-    res = _patched_content(vdir, p.patch)
-    if not res:
+    changes = _patched_files(vdir, p.patch)
+    if not changes:
         raise LabError("patch produced no change")
-    old, new = res
-    dest = (vdir / p.patch["file"]).resolve()
-    if not dest.is_relative_to(vdir.resolve()):
-        raise LabError("patch file escapes variant dir")
-    p.original_content = old
-    dest.write_text(new)
+    base = p.patch.get("base") or {}
+    stale = []
+    for ch in changes:
+        dest = (vdir / ch["file"]).resolve()
+        if not dest.is_relative_to(vdir.resolve()):
+            raise LabError(f"patch file escapes variant dir: {ch['file']}")
+        cur = _sha(dest.read_text() if dest.is_file() else None)
+        if ch["file"] in base and cur != base[ch["file"]]:
+            stale.append(ch["file"])
+    if stale:
+        raise LabError("proposal is stale — file(s) changed since it "
+                       f"was generated: {', '.join(stale)}; reject and "
+                       "re-run `lab ai suggest`")
+    written = []
+    for ch in changes:
+        dest = (vdir / ch["file"]).resolve()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(ch["new"])
+        written.append(dest)
+    p.original_files = {ch["file"]: ch["old"] for ch in changes}
+    p.original_content = changes[0]["old"] or ""
     p.status = "applied"
+    p.rolled_back = False
     p.applied_at = date.today().isoformat()
     dump_yaml(p.model_dump(mode="json"), path)
-    return vdir / p.patch["file"]
+    return written
+
+
+def rollback(lab: Lab, pid: str) -> list[Path]:
+    """Undo an applied proposal: restore originals, delete files it
+    created. The proposal returns to `approved` with rolled_back set."""
+    p, path = get(lab, pid)
+    if p.status != "applied" or p.rolled_back:
+        raise LabError(f"proposal '{pid}' has nothing to roll back")
+    vdir = _variant_dir(lab, f"{p.skill}@{p.variant}")
+    files = p.original_files or (
+        {p.patch["file"]: p.original_content}
+        if p.original_content else {})
+    if not files:
+        raise LabError("no original content recorded — cannot roll back")
+    touched = []
+    for rel, old in files.items():
+        dest = (vdir / rel).resolve()
+        if not dest.is_relative_to(vdir.resolve()):
+            raise LabError(f"recorded file escapes variant dir: {rel}")
+        if old is None:
+            dest.unlink(missing_ok=True)   # file created by the patch
+        else:
+            dest.write_text(old)
+        touched.append(dest)
+    p.rolled_back = True
+    p.status = "approved"
+    dump_yaml(p.model_dump(mode="json"), path)
+    return touched

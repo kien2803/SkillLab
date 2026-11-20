@@ -86,9 +86,16 @@ def emit_system_prompt(bp: Blueprint) -> str:
     return md
 
 
-FORMATS = {
-    "skill-md": emit_skill_md,
-    "system-prompt": emit_system_prompt,
+# Format registry: each target declares its output filename + emitter so
+# a generated artifact never silently lands in the wrong file.
+FORMATS: dict[str, dict] = {
+    "skill-md": {"filename": "SKILL.md", "emit": emit_skill_md,
+                 "frontmatter": True,
+                 "note": "agent skill — SKILL.md entry file"},
+    "system-prompt": {"filename": "system-prompt.md",
+                      "emit": emit_system_prompt,
+                      "frontmatter": False,
+                      "note": "plain system prompt (no frontmatter)"},
     # new targets register here
 }
 
@@ -141,7 +148,18 @@ def generate_skill(lab: Lab, pid: str, bid: str, skill_id: str,
         sdir.mkdir(parents=True, exist_ok=True)
 
     vdir.mkdir(parents=True, exist_ok=True)
-    (vdir / "SKILL.md").write_text(FORMATS[fmt](bp))
+    spec = FORMATS[fmt]
+    artifact = vdir / spec["filename"]
+    artifact.write_text(spec["emit"](bp))
+    # the entry file SKILL.md must exist for every variant; a non-skill-md
+    # format still gets a minimal index so the variant stays loadable
+    if spec["filename"] != "SKILL.md" and not (vdir / "SKILL.md").is_file():
+        (vdir / "SKILL.md").write_text(
+            f"---\nname: {skill_id}\n"
+            f"description: generated {fmt} artifact — see "
+            f"{spec['filename']}\n---\n\n"
+            f"# {skill_id}\n\nGenerated artifact: `{spec['filename']}` "
+            f"({spec['note']}).\n")
 
     if not any(v.id == variant_id for v in meta.variants):
         meta.variants.append(Variant(
@@ -160,7 +178,7 @@ def generate_skill(lab: Lab, pid: str, bid: str, skill_id: str,
     if bp.status in order:
         bp.status = "generated"
     _save(lab, pid, bp)
-    return vdir / "SKILL.md"
+    return artifact
 
 
 # ---------- studio tools: preview / validate / resources / sync -------

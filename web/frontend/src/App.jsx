@@ -1490,14 +1490,41 @@ function DeepResearch() {
     api(`/projects/${pid}/research`,
         { method: "POST", body: JSON.stringify({ objective: obj }) })
       .then(setRun).catch((e) => setErr(String(e)));
-  const exec = () => {
-    const es = new EventSource(`/api/v1/research/${pid}/${run.id}/stream`);
-    es.onmessage = (m) => {
-      const s = JSON.parse(m.data);
-      setRun((r) => ({ ...r, state: { ...(r.state||{}), ...s } }));
-      if (["completed","failed"].includes(s.status)) es.close();
-    };
-    es.onerror = () => { setErr("stream lost"); es.close(); };
+  const exec = async () => {
+    // authenticated SSE via fetch streaming — EventSource can't send
+    // the bearer header, and tokens never go in query strings
+    const ac = new AbortController();
+    try {
+      await api(`/research/${pid}/${run.id}/run`, { method: "POST" });
+      const res = await fetch(
+        `/api/v1/research/${pid}/${run.id}/stream`,
+        { headers: { Authorization: `Bearer ${tok()}` },
+          signal: ac.signal });
+      if (!res.ok || !res.body) { setErr(`stream ${res.status}`); return; }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+          const line = chunk.split("\n")
+            .find((l) => l.startsWith("data: "));
+          if (!line) continue;
+          const s = JSON.parse(line.slice(6));
+          setRun((r) => ({ ...r,
+            state: { ...(r.state || {}), ...s } }));
+          if (["completed", "failed"].includes(s.status)) {
+            ac.abort(); return;
+          }
+        }
+      }
+    } catch (e) {
+      if (e.name !== "AbortError") setErr(`stream lost: ${e}`);
+    }
   };
   const show = () =>
     api(`/research/${pid}/${run.id}`).then((s) =>

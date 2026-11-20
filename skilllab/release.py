@@ -75,14 +75,42 @@ def list_releases(lab: Lab, skill_id: str | None = None) -> list[Release]:
 # ---------- checklist (computed, evidence-based) ----------
 
 
+def variant_hash(lab: Lab, skill_id: str, variant_id: str) -> str:
+    """Content hash of the variant: sha256 over sorted (relpath, bytes)
+    pairs — any file add/edit/delete changes it."""
+    import hashlib
+    vdir = lab.variant_dir(skill_id, variant_id)
+    h = hashlib.sha256()
+    for p in sorted(vdir.rglob("*")):
+        if p.is_file() and not p.is_symlink():
+            h.update(str(p.relative_to(vdir)).encode())
+            h.update(b"\0")
+            h.update(p.read_bytes())
+            h.update(b"\0")
+    return h.hexdigest()[:20]
+
+
+DEFAULT_RELEASE_GATES = {
+    "min_evaluated": 1,        # final (passed/failed) evals required
+    "min_passed": 1,           # *passed* evals required — a failed eval is
+                             # not quality evidence
+    "min_success_rate": None,  # advisory unless set (0..1)
+    "activation_recall": None,  # advisory unless set (0..1)
+    "false_activation_max": None,
+    "regression_clean": False, # when true, latest regression on the
+                             # variant must not be 'regressed'
+}
+
+
 def checklist(lab: Lab, skill_id: str, version: str) -> list[dict]:
     r, _ = _load(lab, skill_id, version)
+    gates = {**DEFAULT_RELEASE_GATES, **(lab.cfg.get("release") or {})}
     checks = []
+    meta = lab.skill(skill_id)
+    vid = r.variant or next((v.id for v in meta.variants), "")
 
     # 1. static analysis: no error-severity findings on this variant
     findings = analyze_skill(lab, skill_id)
-    vid = r.variant or next((v.id for v in lab.skill(skill_id).variants),
-                          "")
     vfinds = findings.get(vid, [])
     errs = [f for f in vfinds if f.severity == "error"]
     checks.append({
@@ -91,26 +119,104 @@ def checklist(lab: Lab, skill_id: str, version: str) -> list[dict]:
         "detail": (f"{len(errs)} error findings" if errs
                    else "no error findings")})
 
-    # 2. evaluated evidence: ≥1 run of this variant with a completed eval
-    evaluated = 0
+    # 2. evaluated evidence on THIS variant+content hash
+    evaluated = passed = 0
+    cur_hash = None
     for rd in lab.runs_dir.iterdir() if lab.runs_dir.is_dir() else []:
         ry = rd / "run.yaml"
         ey = rd / "eval.yaml"
         if not ry.is_file() or not ey.is_file():
             continue
         rr = load_yaml(ry)
-        if rr.get("skill_ref") == f"{skill_id}@{vid}" or \
-                (rr.get("skill_ref") == skill_id and not vid):
-            ev = load_yaml(ey)
-            if ev.get("status") in ("passed", "failed"):
-                evaluated += 1
+        if not (rr.get("skill_ref") == f"{skill_id}@{vid}" or
+                (rr.get("skill_ref") == skill_id and not vid)):
+            continue
+        if rr.get("status") == "error":
+            continue                       # infra failure ≠ evidence
+        ev = load_yaml(ey)
+        if ev.get("status") in ("passed", "failed"):
+            evaluated += 1
+            if ev.get("status") == "passed":
+                passed += 1
     checks.append({
         "id": "evaluated-evidence", "required": True,
-        "ok": evaluated >= 1,
-        "detail": f"{evaluated} evaluated run(s) on {skill_id}@{vid}"})
+        "ok": evaluated >= gates["min_evaluated"],
+        "detail": f"{evaluated} evaluated run(s) on {skill_id}@{vid} "
+                  f"(need >= {gates['min_evaluated']})"})
+    checks.append({
+        "id": "passed-evidence", "required": True,
+        "ok": passed >= gates["min_passed"],
+        "detail": f"{passed} passing eval(s) (need >= "
+                  f"{gates['min_passed']}; failed evals are evidence of "
+                  "a problem, not of quality)"})
+    if gates["min_success_rate"] is not None and evaluated:
+        rate = passed / evaluated
+        checks.append({
+            "id": "success-rate", "required": True,
+            "ok": rate >= gates["min_success_rate"],
+            "detail": f"{rate:.0%} passed of {evaluated} "
+                      f"(need >= {gates['min_success_rate']:.0%})"})
 
-    # 3. blueprint traceability: variant produced by a blueprint?
-    meta = lab.skill(skill_id)
+    # 3. content-hash consistency — release must point at the exact
+    #    content that passed validation
+    try:
+        cur_hash = variant_hash(lab, skill_id, vid)
+    except LabError:
+        cur_hash = None
+    if r.variant_hash:
+        checks.append({
+            "id": "content-hash", "required": True,
+            "ok": cur_hash == r.variant_hash,
+            "detail": (f"variant content matches pinned hash "
+                       f"{r.variant_hash}" if cur_hash == r.variant_hash
+                       else f"variant changed since validation "
+                            f"({cur_hash} != pinned {r.variant_hash})")})
+    else:
+        checks.append({
+            "id": "content-hash", "required": False,
+            "ok": cur_hash is not None,
+            "detail": "no pinned hash — moving to 'validated' records it"})
+
+    # 4. optional evidence gates driven by lab.yaml `release:`
+    if gates["activation_recall"] is not None or \
+            gates["false_activation_max"] is not None:
+        from .graduation import evaluate_skill
+        rep = evaluate_skill(lab, skill_id)
+        if gates["activation_recall"] is not None:
+            ar = rep.activation_rate
+            checks.append({
+                "id": "activation-recall", "required": True,
+                "ok": ar is not None and ar >= gates["activation_recall"],
+                "detail": (f"{ar:.0%} >= {gates['activation_recall']:.0%}"
+                           if ar is not None else "no activation data")})
+        if gates["false_activation_max"] is not None:
+            far = rep.false_activation_rate
+            checks.append({
+                "id": "false-activation", "required": True,
+                "ok": far is not None
+                      and far <= gates["false_activation_max"],
+                "detail": (f"{far:.0%} <= "
+                           f"{gates['false_activation_max']:.0%}"
+                           if far is not None else "no negative data")})
+    if gates["regression_clean"]:
+        reg_dir = lab.d("regressions")
+        worst = None
+        if reg_dir.is_dir():
+            for rd in sorted(reg_dir.iterdir()):
+                ry = rd / "regression.yaml"
+                if not ry.is_file():
+                    continue
+                m = load_yaml(ry)
+                if m.get("skill") == skill_id \
+                        and m.get("candidate") == vid \
+                        and m.get("verdict"):
+                    worst = m["verdict"]
+        checks.append({
+            "id": "regression-clean", "required": True,
+            "ok": worst not in ("regressed",),
+            "detail": f"latest regression verdict: {worst or 'none'}"})
+
+    # 5. blueprint traceability: variant produced by a blueprint?
     note = next((v.note for v in meta.variants if v.id == vid), "")
     has_bp = "blueprint" in (note or "")
     checks.append({
@@ -118,7 +224,7 @@ def checklist(lab: Lab, skill_id: str, version: str) -> list[dict]:
         "ok": has_bp,
         "detail": note or "no blueprint provenance"})
 
-    # 4. changelog non-empty
+    # 6. changelog non-empty
     checks.append({
         "id": "changelog", "required": True,
         "ok": bool(r.changelog.strip()),
@@ -130,6 +236,9 @@ def checklist(lab: Lab, skill_id: str, version: str) -> list[dict]:
 def set_status(lab: Lab, skill_id: str, version: str,
                status: str) -> None:
     r, p = _load(lab, skill_id, version)
+    if status == "validated":
+        # pin the exact content the checklist was evaluated against
+        r.variant_hash = variant_hash(lab, skill_id, r.variant)
     if status == "released":
         failed = [c for c in checklist(lab, skill_id, version)
                   if c["required"] and not c["ok"]]

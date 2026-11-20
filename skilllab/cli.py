@@ -1086,8 +1086,15 @@ def cmd_ai_reject(args) -> int:
 
 def cmd_ai_apply(args) -> int:
     from . import architect
-    p = architect.apply(_lab(args), args.id)
-    print(f"{args.id} applied → {p}")
+    paths = architect.apply(_lab(args), args.id)
+    print(f"{args.id} applied → {', '.join(str(p) for p in paths)}")
+    return 0
+
+
+def cmd_ai_rollback(args) -> int:
+    from . import architect
+    paths = architect.rollback(_lab(args), args.id)
+    print(f"{args.id} rolled back → {', '.join(str(p) for p in paths)}")
     return 0
 
 
@@ -1303,6 +1310,7 @@ def build_parser() -> argparse.ArgumentParser:
     x = ss.add_parser("approve"); x.add_argument("id"); x.set_defaults(f=cmd_ai_approve)
     x = ss.add_parser("reject"); x.add_argument("id"); x.set_defaults(f=cmd_ai_reject)
     x = ss.add_parser("apply"); x.add_argument("id"); x.set_defaults(f=cmd_ai_apply)
+    x = ss.add_parser("rollback"); x.add_argument("id"); x.set_defaults(f=cmd_ai_rollback)
     return p
 
 

@@ -78,7 +78,8 @@ def new_skill(lab: Lab, skill_id: str, kind: str = "skill-md") -> Path:
     return skill_dir
 
 
-GIT_URL_RE = re.compile(r"^(https?://|ssh://|git@)")
+GIT_URL_RE = re.compile(r"^(https://|ssh://|git@|git://)")
+GIT_TIMEOUT = 180        # seconds; clone is shallow but still capped
 
 # Well-known locations other agents/tools install skills into.
 SCAN_DIRS = ("~/.agents/skills", "~/.claude/skills",
@@ -100,20 +101,42 @@ def scan_skill_dirs() -> list[Path]:
 
 
 def _fetch_git(url_ref: str) -> tuple[Path, Path]:
-    """Shallow-clone `url[#subdir]` into a tempdir. Returns (root, subdir)."""
+    """Shallow-clone `url[#subdir]` into a tempdir. Returns (root, subdir).
+    Only approved protocols; credential prompts are disabled and the
+    clone is time-boxed; a #subdir must stay inside the clone."""
     url, _, frag = url_ref.partition("#")
+    if not GIT_URL_RE.match(url):
+        raise LabError(f"git url '{url[:60]}' uses an unapproved protocol "
+                       "(allowed: https://, ssh://, git@, git://)")
     tmp = Path(tempfile.mkdtemp(prefix="skilllab-git-"))
+    env = {"GIT_TERMINAL_PROMPT": "0", "PATH": __import__("os").environ
+           .get("PATH", "")}
     try:
-        r = subprocess.run(["git", "clone", "--depth", "1", url, str(tmp)],
-                           capture_output=True, text=True, timeout=180)
+        r = subprocess.run(
+            ["git", "clone", "--depth", "1", "--single-branch",
+             url, str(tmp)],
+            capture_output=True, text=True, timeout=GIT_TIMEOUT, env=env)
     except FileNotFoundError as e:
         raise LabError("git is not on PATH — needed for URL imports") from e
     except subprocess.TimeoutExpired as e:
+        shutil.rmtree(tmp, ignore_errors=True)
         raise LabError(f"git clone timed out for {url}") from e
     if r.returncode != 0:
         shutil.rmtree(tmp, ignore_errors=True)
         raise LabError(f"git clone failed: {r.stderr.strip()[:300]}")
-    return tmp, (tmp / frag if frag else tmp)
+    sub = (tmp / frag).resolve() if frag else tmp
+    if frag and (not sub.is_relative_to(tmp.resolve())
+                 or not sub.is_dir()):
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise LabError(f"#subdir '{frag}' escapes the cloned repo")
+    return tmp, sub
+
+
+def _reject_symlinks(src: Path) -> None:
+    for p in src.rglob("*"):
+        if p.is_symlink():
+            raise LabError(f"source contains symlink '{p.name}' — "
+                           "refusing to import (could point outside)")
 
 
 def add_skill(lab: Lab, src: str | Path, variant_id: str | None = None,
@@ -134,6 +157,7 @@ def add_skill(lab: Lab, src: str | Path, variant_id: str | None = None,
         entry = skill_entry_file(src)
         if not entry:
             raise LabError(f"No SKILL.md found in {src}")
+        _reject_symlinks(src)
         fm, _ = parse_frontmatter(entry.read_text())
         sid = _slugify(skill_id or str(fm.get("name") or src.name))
         skill_dir = lab.skills_dir / sid

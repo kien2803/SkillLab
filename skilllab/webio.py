@@ -2,6 +2,23 @@
 
 Every fetched page is untrusted content — extracted text only, never
 executed, never treated as instructions.
+
+SSRF policy (fail closed):
+  - http/https only; no userinfo; host must resolve to public IPs only
+    (every resolved address is checked, not just the first);
+  - ports restricted to 80/443;
+  - redirects are validated *before* being followed — a custom opener
+    re-runs the full check on every hop (scheme, DNS, private ranges,
+    port) and caps the chain, so a public URL can never bounce the
+    request into an internal service;
+  - response must be a textual content type and fit the byte budget;
+  - total redirects + per-request timeout bound the whole operation.
+
+Residual: Python's stdlib cannot pin the TCP connection to the exact
+IP that passed DNS validation, so a hostile DNS that flips answers
+between validation and connect (rebinding) is mitigated — every
+resolved address must be public and each redirect hop revalidates —
+not fully eliminated. Anything stronger needs a custom transport.
 """
 from __future__ import annotations
 
@@ -9,7 +26,7 @@ import hashlib
 import ipaddress
 import re
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import urllib.request
 
@@ -17,6 +34,10 @@ from .lab import LabError
 
 MAX_BYTES = 2_000_000
 TIMEOUT = 20
+MAX_REDIRECTS = 5
+ALLOWED_PORTS = {None, 80, 443}
+TEXT_TYPES = ("text/", "application/xhtml", "application/xml",
+              "application/json", "application/rss", "application/atom")
 _UA = "SkillLab/0.1 (research reader)"
 
 PRIVATE = tuple(ipaddress.ip_network(n) for n in (
@@ -24,39 +45,83 @@ PRIVATE = tuple(ipaddress.ip_network(n) for n in (
     "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10", "0.0.0.0/8"))
 
 
+def _bad_addr(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Blocked when the address is not globally routable — covers
+    private/loopback/link-local/multicast/reserved/unspecified, v4+v6."""
+    if any(addr in net for net in PRIVATE):
+        return True
+    return not addr.is_global
+
+
 def _check_url(url: str) -> str:
     p = urlparse(url)
     if p.scheme not in ("http", "https"):
         raise LabError(f"blocked scheme '{p.scheme or '?'}' — http(s) only")
+    if p.username or p.password:
+        raise LabError("userinfo in url is not allowed")
     if not p.hostname:
         raise LabError("no host in url")
+    if p.port not in ALLOWED_PORTS:
+        raise LabError(f"blocked port {p.port} — only 80/443")
     try:
-        infos = socket.getaddrinfo(p.hostname, None)
-    except socket.gaierror:
+        host = ipaddress.ip_address(p.hostname)          # literal IP
+        infos = [(None, None, None, None, (str(host), 0))]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(p.hostname, None)
+        except socket.gaierror:
+            raise LabError(f"cannot resolve '{p.hostname}'")
+    if not infos:
         raise LabError(f"cannot resolve '{p.hostname}'")
     for i in infos:
-        addr = ipaddress.ip_address(i[-1][0])
-        if any(addr in net for net in PRIVATE):
-            raise LabError(f"blocked private/loopback address {addr}")
+        try:
+            addr = ipaddress.ip_address(i[-1][0])
+        except ValueError:
+            raise LabError(f"unparsable resolved address for "
+                           f"'{p.hostname}'")
+        if _bad_addr(addr):
+            raise LabError(f"blocked non-public address {addr}")
     return p.hostname
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    """Validate each redirect target before urllib follows it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        n = getattr(req, "_skilllab_redirects", 0) + 1
+        if n > MAX_REDIRECTS:
+            raise LabError(f"too many redirects (>{MAX_REDIRECTS})")
+        target = urljoin(req.full_url, newurl)
+        _check_url(target)                 # validate BEFORE connecting
+        new = super().redirect_request(req, fp, code, msg, headers,
+                                       target)
+        if new is None:
+            raise LabError(f"unsupported redirect ({code})")
+        new._skilllab_redirects = n
+        return new
 
 
 def fetch(url: str, max_bytes: int = MAX_BYTES) -> dict:
     """SSRF-guarded GET. Returns title/text/metadata; raises LabError."""
     _check_url(url)
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    opener = urllib.request.build_opener(_SafeRedirect())
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        with opener.open(req, timeout=TIMEOUT) as r:
             final = r.geturl()
-            _check_url(final)          # revalidate after redirects
-            ctype = r.headers.get("Content-Type", "")
+            _check_url(final)          # belt & braces on the landed URL
+            ctype = (r.headers.get("Content-Type") or "").split(";")[0] \
+                .strip().lower()
+            if ctype and not any(ctype.startswith(t) or ctype == t
+                                 for t in TEXT_TYPES):
+                raise LabError(f"blocked content-type '{ctype}'")
             raw = r.read(max_bytes + 1)
             if len(raw) > max_bytes:
                 raise LabError(f"response exceeds {max_bytes} bytes")
     except LabError:
         raise
     except Exception as e:
-        raise LabError(f"fetch failed: {e}")
+        raise LabError(f"fetch failed: {type(e).__name__}: {e}")
     html = raw.decode("utf-8", "replace")
     title = (re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
              or [None, ""])[1]

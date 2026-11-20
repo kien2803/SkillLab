@@ -277,6 +277,8 @@ class EvalResult(BaseModel):
     success: bool = False
     status: Optional[EvalStatus] = None   # pending | passed | failed | error
     evaluated_at: Optional[str] = None    # ISO timestamp (provenance)
+    rubric: Optional[str] = None          # rubric id used (provenance)
+    evaluator: str = ""                   # mock | model name | human
 
     @model_validator(mode="after")
     def _sync_status(self) -> "EvalResult":
@@ -421,6 +423,7 @@ class Release(BaseModel):
     changelog: str = ""
     created: str = ""
     released_at: str = ""
+    variant_hash: str = ""              # content hash pinned at `validated`
 
 
 # ---------- architect proposals ----------
@@ -435,9 +438,13 @@ class Proposal(BaseModel):
     skill: str
     variant: str = ""
     finding: str = ""                  # the analyzer finding addressed
-    patch: dict = Field(default_factory=dict)   # {type, file, ...}
+    patch: dict = Field(default_factory=dict)   # {type, file, base{…}}
     diff_preview: str = ""
     status: ProposalStatus = "pending"
-    original_content: str = ""         # pre-apply snapshot for rollback
+    original_content: str = ""         # legacy pre-apply snapshot (1st file)
+    original_files: dict[str, Optional[str]] = Field(
+        default_factory=dict)          # every file's pre-apply text; None =
+                                       # the patch created that file
+    rolled_back: bool = False
     created: str = ""
     applied_at: str = ""

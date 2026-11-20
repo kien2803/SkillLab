@@ -25,7 +25,8 @@ DEFAULT_GRADUATION = {
 @dataclass
 class GraduationReport:
     skill_id: str
-    n_runs: int = 0
+    n_runs: int = 0                     # usable runs (non-error)
+    n_total: int = 0                    # all runs incl. infra failures
     activation_rate: float | None = None
     false_activation_rate: float | None = None
     task_deltas: dict[str, float] = field(default_factory=dict)
@@ -34,12 +35,22 @@ class GraduationReport:
     by_ref: dict[str, dict[str, list[float]]] = field(default_factory=dict)
 
 
+def _run_cfg(rec: RunRecord) -> tuple:
+    """Equivalence key for comparing runs: experiment context, the model
+    actually used (rerun --model records it per run), injection mode and
+    temperature. Only runs sharing this key are scientifically comparable."""
+    return (rec.experiment, str((rec.model or {}).get("name", "?")),
+            rec.injection_mode,
+            str((rec.model or {}).get("temperature", "?")))
+
+
 def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
     cfg = {**DEFAULT_GRADUATION, **lab.cfg.get("graduation", {})}
     rep = GraduationReport(skill_id=skill_id)
 
     skill_runs: list[tuple[RunRecord, EvalResult | None]] = []
-    ctrl_runs: dict[str, list[tuple[RunRecord, EvalResult | None]]] = {}
+    ctrl_runs: list[tuple[RunRecord, EvalResult | None]] = []
+    n_total = 0
     for d in lab.runs_dir.iterdir() if lab.runs_dir.is_dir() else []:
         ry = d / "run.yaml"
         if not ry.is_file():
@@ -49,14 +60,19 @@ def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
             if (d / "eval.yaml").is_file() else None
         ref = rec.skill_ref or ""
         if ref == skill_id or ref.startswith(skill_id + "@"):
+            n_total += 1
+            if rec.status == "error":
+                continue   # infra failure ≠ quality evidence
             skill_runs.append((rec, ev))
-        else:
-            ctrl_runs.setdefault(rec.experiment, []).append((rec, ev))
+        elif rec.status != "error":
+            ctrl_runs.append((rec, ev))
     rep.n_runs = len(skill_runs)
+    rep.n_total = n_total
 
     act, false_act = [], []
-    task_scores: dict[str, list[float]] = {}
-    ctrl_scores: dict[str, dict[str, list[float]]] = {}
+    # skill scores grouped by equivalence key: (exp, model, mode, temp)
+    skill_scores: dict[tuple, dict[str, list[float]]] = {}
+    ctrl_pool: dict[tuple, dict[str, list[float]]] = {}
 
     def score_of(ev: EvalResult | None) -> float | None:
         if ev is None or ev.status not in ("passed", "failed"):
@@ -77,7 +93,8 @@ def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
             if task.kind == "performance":
                 s = score_of(ev)
                 if s is not None:
-                    task_scores.setdefault(rec.task, []).append(s)
+                    skill_scores.setdefault(_run_cfg(rec), {}) \
+                        .setdefault(rec.task, []).append(s)
             continue
         ref_slot = rep.by_ref.setdefault(rec.skill_ref or "?",
                                          {"act": [], "false": []})
@@ -94,34 +111,46 @@ def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
         elif task.kind == "performance":
             s = score_of(ev)
             if s is not None:
-                task_scores.setdefault(rec.task, []).append(s)
-
-    for exp_id, runs in ctrl_runs.items():
-        try:
-            exp = lab.experiment(exp_id)
-        except Exception:
-            continue
-        ctrl_names = {a.name for a in exp.arms if a.skill is None}
-        for rec, ev in runs:
-            if rec.arm not in ctrl_names or rec.task not in task_scores:
-                continue
-            s = score_of(ev)
-            if s is not None:
-                ctrl_scores.setdefault(exp_id, {}) \
+                skill_scores.setdefault(_run_cfg(rec), {}) \
                     .setdefault(rec.task, []).append(s)
+
+    # pool control runs ONLY inside the same equivalence cell —
+    # a control from a different experiment/model/mode is not evidence
+    exp_ctrl_arms: dict[str, set] = {}
+    for rec, ev in ctrl_runs:
+        key = _run_cfg(rec)
+        if key not in skill_scores:
+            continue
+        if rec.experiment not in exp_ctrl_arms:
+            try:
+                exp = lab.experiment(rec.experiment)
+                exp_ctrl_arms[rec.experiment] = {
+                    a.name for a in exp.arms if a.skill is None}
+            except LabError:
+                exp_ctrl_arms[rec.experiment] = set()
+        if rec.arm not in exp_ctrl_arms[rec.experiment]:
+            continue
+        s = score_of(ev)
+        if s is not None:
+            ctrl_pool.setdefault(key, {}).setdefault(rec.task, []).append(s)
 
     rep.activation_rate = statistics.mean(act) if act else None
     rep.false_activation_rate = statistics.mean(false_act) if false_act else None
-    for tid, scores in task_scores.items():
-        ctrl = [s for exp_map in ctrl_scores.values()
-                for t, ss in exp_map.items() if t == tid for s in ss]
-        if ctrl:
-            rep.task_deltas[tid] = statistics.mean(scores) - statistics.mean(ctrl)
+    task_delta_samples: dict[str, list[float]] = {}
+    for key, per_task in skill_scores.items():
+        ctrls = ctrl_pool.get(key, {})
+        for tid, scores in per_task.items():
+            if ctrls.get(tid):
+                task_delta_samples.setdefault(tid, []).append(
+                    statistics.mean(scores) - statistics.mean(ctrls[tid]))
+    for tid, ds in task_delta_samples.items():
+        rep.task_deltas[tid] = statistics.mean(ds)
 
     ar, far = rep.activation_rate, rep.false_activation_rate
     rep.verdicts = [
         ("sample size", rep.n_runs >= 9,
-         f"{rep.n_runs} runs (want >=9: 3 rollouts x 3 tasks)"),
+         f"{rep.n_runs} usable runs (of {rep.n_total} recorded; "
+         "want >=9: 3 rollouts x 3 tasks)"),
         ("activation",
          ar >= cfg["activation_rate"] if ar is not None else None,
          f"{ar:.0%} >= {cfg['activation_rate']:.0%}"
