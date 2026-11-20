@@ -1415,9 +1415,49 @@ def lab_status(l: Lab = Depends(lab)):
             "runs": n_runs, "warnings": warns}
 
 
+class IdIn(BaseModel):
+    id: str
+
+
 @app.get("/api/v1/tasks")
 def tasks(l: Lab = Depends(lab)):
     return [t.model_dump(mode="json") for t in l.tasks()]
+
+
+@app.post("/api/v1/tasks", dependencies=[Depends(auth)])
+def task_new(body: IdIn, l: Lab = Depends(lab)):
+    """`lab task new` — scaffold task.yaml."""
+    from skilllab.cli import TASK_TEMPLATE
+    d = l.tasks_dir / body.id
+    if (d / "task.yaml").is_file():
+        raise HTTPException(409, f"task '{body.id}' already exists")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "task.yaml").write_text(TASK_TEMPLATE.format(tid=body.id))
+    return {"path": str(d / "task.yaml")}
+
+
+@app.get("/api/v1/rubrics")
+def rubrics(l: Lab = Depends(lab)):
+    from skilllab.models import load_yaml
+    out = []
+    if l.rubrics_dir.is_dir():
+        for p in sorted(l.rubrics_dir.glob("*.yaml")):
+            r = load_yaml(p)
+            r.setdefault("id", p.stem)
+            out.append(r)
+    return out
+
+
+@app.post("/api/v1/rubrics", dependencies=[Depends(auth)])
+def rubric_new(body: IdIn, l: Lab = Depends(lab)):
+    """`lab rubric new` — scaffold rubric yaml."""
+    from skilllab.cli import RUBRIC_TEMPLATE
+    p = l.rubrics_dir / f"{body.id}.yaml"
+    if p.is_file():
+        raise HTTPException(409, f"rubric '{body.id}' already exists")
+    l.rubrics_dir.mkdir(parents=True, exist_ok=True)
+    p.write_text(RUBRIC_TEMPLATE.format(rid=body.id))
+    return {"path": str(p)}
 
 
 class ExportIn(BaseModel):

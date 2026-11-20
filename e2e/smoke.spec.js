@@ -99,6 +99,8 @@ test("write gates on lifecycle endpoints", async ({ page }) => {
     ["post", "/api/v1/proposals/p/reject", {}],
     ["post", "/api/v1/export", { name: "p" }],
     ["post", "/api/v1/import", { src: "/tmp/x" }],
+    ["post", "/api/v1/tasks", { id: "t" }],
+    ["post", "/api/v1/rubrics", { id: "r" }],
   ]) {
     const r = await page.request[method](url, { data });
     expect(r.status()).toBe(401);
@@ -159,4 +161,16 @@ test("projects page detail renders entity sections", async ({ page }) => {
   await expect(page.getByText(/Questions \(/)).toBeVisible();
   await expect(page.getByText(/Sources \(/)).toBeVisible();
   await expect(page.getByText(/Decisions \(/)).toBeVisible();
+});
+
+test("workspace page lists tasks + rubrics", async ({ page }) => {
+  await page.goto("/workspace");
+  await expect(page.getByText(/Tasks \(/)).toBeVisible();
+  await expect(page.getByText(/Rubrics \(/)).toBeVisible();
+  await expect(page.getByText("write-commit-msg")).toBeVisible();
+  const r = await page.request.get("/api/v1/rubrics");
+  expect(r.ok()).toBeTruthy();
+  expect(Array.isArray(await r.json())).toBeTruthy();
+  const ts = await (await page.request.get("/api/v1/tasks")).json();
+  expect(ts.map((t) => t.id)).toContain("write-commit-msg");
 });

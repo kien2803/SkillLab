@@ -17,7 +17,7 @@ function Nav() {
   const items = [["/", "Overview"], ["/projects", "Research"],
                  ["/explorer", "Web Explorer"], ["/deep", "Deep Research"], ["/skills", "Skill Studio"],
                  ["/blueprints", "Blueprints"], ["/experiments", "Experiments"], ["/regressions", "Regressions"],
-                 ["/proposals", "AI Architect"], ["/failures", "Failures"], ["/knowledge", "Knowledge"], ["/releases", "Releases"]];
+                 ["/workspace", "Workspace"], ["/proposals", "AI Architect"], ["/failures", "Failures"], ["/knowledge", "Knowledge"], ["/releases", "Releases"]];
   const [tk, setTk] = useState(tok());
   return (
     <nav style={{ display: "flex", gap: 16, borderBottom: "1px solid #333",
@@ -989,6 +989,61 @@ function Experiments() {
   </Page>;
 }
 
+function Workspace() {
+  const [ts, setTs] = useState([]);
+  const [rb, setRb] = useState([]);
+  const [msg, setMsg] = useState("");
+  const load = () => {
+    api("/tasks").then(setTs).catch(() => {});
+    api("/rubrics").then(setRb).catch(() => {});
+  };
+  useEffect(load, []);
+  const mk = (kind) => (v) =>
+    api(`/${kind}`, { method: "POST", body: JSON.stringify({ id: v }) })
+      .then(() => { setMsg(`${kind} '${v}' scaffolded`); load(); })
+      .catch((e) => setMsg(String(e)));
+  return <Page><h2>Workspace — task bank & rubrics</h2>
+    {msg && <p style={{ color: "#8f8" }}>{msg}</p>}
+    <div style={card}>
+      <b>Tasks ({ts.length})</b>{" "}
+      <AddForm ph="new task id" onAdd={mk("tasks")} />
+      {ts.map((t) => <div key={t.id} style={{ fontSize: 12,
+        marginTop: 6 }}>
+        <b>{t.id}</b> <span style={{ color: "#5af" }}>[{t.kind}]</span>
+        <span style={{ color: "#888" }}>
+          {" "}rubric: {t.rubric || "—"} · checks:
+          {" "}{(t.deterministic_checks || []).length} · fixtures:
+          {" "}{(t.fixtures || []).join(", ") || "—"}</span>
+        {t.skill_relevance && (t.skill_relevance.expected?.length ||
+          t.skill_relevance.unexpected?.length) > 0 &&
+          <div style={{ fontSize: 11, color: "#8af" }}>
+            expect: {(t.skill_relevance.expected || []).join(", ") ||
+              "—"} · not: {(t.skill_relevance.unexpected || [])
+              .join(", ") || "—"}</div>}
+        <div style={{ fontSize: 11, color: "#aaa" }}>
+          {(t.prompt || "").trim().slice(0, 140)}</div>
+      </div>)}
+    </div>
+    <div style={card}>
+      <b>Rubrics ({rb.length})</b>{" "}
+      <AddForm ph="new rubric id" onAdd={mk("rubrics")} />
+      {rb.map((r) => <div key={r.id} style={{ fontSize: 12,
+        marginTop: 6 }}>
+        <b>{r.id}</b>
+        <table style={{ fontSize: 11, borderCollapse: "collapse",
+          marginTop: 2 }}>
+          <tbody>{(r.criteria || []).map((c, i) => <tr key={i}>
+            <td style={td}>{c.id}</td>
+            <td style={td}>w={c.weight}</td>
+            <td style={td}>{c.method}</td>
+            <td style={{ ...td, color: "#888" }}>
+              {c.check || c.scale || ""}</td>
+          </tr>)}</tbody></table>
+      </div>)}
+    </div>
+  </Page>;
+}
+
 const th = { textAlign: "left", borderBottom: "1px solid #333",
              padding: "2px 10px 2px 0" };
 const td = { padding: "2px 14px 2px 0", borderBottom: "1px solid #222" };
@@ -1425,6 +1480,7 @@ export default function App() {
     <Route path="/experiments" element={<Experiments />} />
     <Route path="/runs/:rid" element={<RunDetail />} />
     <Route path="/regressions" element={<Regressions />} />
+    <Route path="/workspace" element={<Workspace />} />
     <Route path="/proposals" element={<Proposals />} />
     <Route path="/failures" element={<Failures />} />
     <Route path="/knowledge" element={<Knowledge />} />
