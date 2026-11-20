@@ -16,7 +16,6 @@ LAB_DIR = Path(os.environ.get("SKILLLAB_DIR", "examples/demo-lab"))
 
 app = FastAPI(title="SkillLab API", version="0.1.0")
 
-
 def lab() -> Lab:
     root = Path(os.environ.get("SKILLLAB_DIR", str(LAB_DIR)))
     if not (root / "lab.yaml").is_file():
@@ -411,3 +410,23 @@ def runs(l: Lab = Depends(lab)):
         if ry.is_file():
             out.append(RunRecord(**load_yaml(ry)).model_dump(mode="json"))
     return out[-100:]
+
+
+# ---- production: serve the built SPA from the same port -------------
+
+_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+if _DIST.is_dir():
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa_catchall(path: str):
+        if path.startswith("api/"):
+            raise HTTPException(404)
+        f = (_DIST / path).resolve()
+        if f.is_file() and _DIST in f.parents:
+            return FileResponse(f)
+        return FileResponse(_DIST / "index.html")  # client routing
+
+
+
