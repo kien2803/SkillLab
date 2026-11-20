@@ -14,7 +14,7 @@ test("skills interactions", async ({ page }) => {
   await page.getByRole("link", { name: "trace" }).first().click();
   await expect(page.getByText(/Trace:/)).toBeVisible();
   await page.getByRole("button", { name: "Graduation" }).first().click();
-  await expect(page.getByText(/Graduation —/)).toBeVisible();
+  await expect(page.getByText(/Graduation · commit-helper/)).toBeVisible();
   await page.getByRole("button", { name: "Scan agent dirs" }).click();
   await expect(page.getByText("Discovered skills")).toBeVisible();
 });
