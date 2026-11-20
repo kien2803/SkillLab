@@ -342,3 +342,45 @@ def annotate(pid: str, sid: str, body: AnnotIn, l: Lab = Depends(lab)):
     except LabError as e:
         raise HTTPException(404, str(e))
     return {"id": sid, "annotated": True}
+
+
+# ---------------- deep research ----------------
+
+class DrIn(BaseModel):
+    objective: str
+    plan: dict | None = None
+
+
+@app.post("/api/v1/projects/{pid}/research",
+          dependencies=[Depends(auth)])
+def dr_start(pid: str, body: DrIn, l: Lab = Depends(lab)):
+    from skilllab import deep
+    rd = deep.start(l, pid, body.objective, body.plan)
+    return {"id": rd.name, "state": deep.get(rd)}
+
+
+@app.post("/api/v1/research/{pid}/{rid}/run",
+          dependencies=[Depends(auth)])
+def dr_run(pid: str, rid: str, l: Lab = Depends(lab)):
+    from skilllab import deep
+    rd = deep.runs_dir(l, pid) / rid
+    if not (rd / "run.yaml").is_file():
+        raise HTTPException(404, "research run not found")
+    deep.approve(rd)
+    try:
+        return deep.execute(l, pid, rd, log=lambda m: None)
+    except LabError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.get("/api/v1/research/{pid}/{rid}")
+def dr_get(pid: str, rid: str, l: Lab = Depends(lab)):
+    from skilllab import deep
+    rd = deep.runs_dir(l, pid) / rid
+    if not (rd / "run.yaml").is_file():
+        raise HTTPException(404, "research run not found")
+    st = deep.get(rd)
+    rep = rd / "report.md"
+    if rep.is_file():
+        st["report_md"] = rep.read_text()
+    return st

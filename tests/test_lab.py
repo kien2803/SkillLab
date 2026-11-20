@@ -1656,3 +1656,19 @@ def test_webio_save_source_dedupe(lab, tmp_path):
     page2 = dict(page, final_url="HTTPS://X.TEST/a/")
     r3 = save_source(lab, "wp", page2)
     assert r3["deduplicated"]
+
+
+def test_deep_research_plan_lifecycle(lab):
+    from skilllab import deep, research
+    research.new_project(lab, "dp", "D")
+    rd = deep.start(lab, "dp",
+                    "How do agents refactor?; common failures?")
+    st = deep.get(rd)
+    assert st["status"] == "planned"
+    assert st["plan"]["queries"] == ["How do agents refactor",
+                                     "common failures"]
+    deep.approve(rd)
+    assert deep.get(rd)["status"] == "approved"
+    # queries capped
+    rd2 = deep.start(lab, "dp", "a;b;c;d;e;f;g;h")
+    assert len(deep.get(rd2)["plan"]["queries"]) == 6
