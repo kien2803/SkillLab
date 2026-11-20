@@ -243,3 +243,24 @@ pre.dump {
   .kpis { flex-wrap: wrap; }
   .kpis > div { flex: 1 1 45%; }
 }
+
+/* ---- sign-in gate ---- */
+.gate {
+  position: fixed; inset: 0; display: grid; place-items: center;
+  background: var(--ground);
+}
+.gate-card {
+  width: 300px; display: flex; flex-direction: column; gap: 10px;
+  padding: 26px 24px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface);
+}
+.gate-card input {
+  width: 100%; padding: 7px 9px; font: 13px/1.4 "JetBrains Mono", ui-monospace, monospace;
+  color: var(--text); background: var(--ground);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.gate-card input:focus { outline: none; border-color: var(--accent); }
+.gate-logo {
+  font: 600 17px/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: -0.5px;
+}
+.gate-logo span { color: var(--accent); }

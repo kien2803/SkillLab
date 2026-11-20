@@ -1591,7 +1591,47 @@ function BpEdit({ pid, bid, fields, reload }) {
   </div>;
 }
 
+function Gate() {
+  /* Sign-in screen: without a token every api() call would 401 —
+     gate first so pages never fire doomed requests. Saving a valid
+     token fires the "storage" event that flips App into the shell. */
+  const [tk, setTk] = useState("");
+  const [err, setErr] = useState("");
+  const tryToken = async () => {
+    const v = tk.trim();
+    if (!v) return;
+    const r = await fetch("/api/v1/status",
+      { headers: { Authorization: `Bearer ${v}` } });
+    if (r.ok) {
+      localStorage.setItem(TOKEN_KEY, v);
+      window.dispatchEvent(new Event("storage"));
+    } else {
+      setErr(`invalid token (${r.status})`);
+    }
+  };
+  return (
+    <div className="gate">
+      <div className="gate-card">
+        <div className="gate-logo">skill<span>lab</span></div>
+        <div className="small mut">api token</div>
+        <input autoFocus value={tk} placeholder="SKILLLAB_TOKEN"
+          onChange={(e) => setTk(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && tryToken()} />
+        {err && <div className="small" style={{ color:
+          "var(--pill-negative-ink)" }}>{err}</div>}
+        <button className="primary" onClick={tryToken}>Sign in</button>
+      </div>
+    </div>);
+}
+
 export default function App() {
+  const [authed, setAuthed] = useState(!!tok());
+  useEffect(() => {
+    const f = () => setAuthed(!!tok());
+    window.addEventListener("storage", f);
+    return () => window.removeEventListener("storage", f);
+  }, []);
+  if (!authed) return <Gate />;
   return (<div className="shell"><Rail /><Routes>
     <Route path="/" element={<Overview />} />
     <Route path="/projects" element={<Projects />} />
