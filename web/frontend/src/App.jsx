@@ -15,7 +15,7 @@ const api = (p, opts = {}) =>
 
 function Nav() {
   const items = [["/", "Overview"], ["/projects", "Research"],
-                 ["/explorer", "Web Explorer"], ["/skills", "Skill Studio"],
+                 ["/explorer", "Web Explorer"], ["/deep", "Deep Research"], ["/skills", "Skill Studio"],
                  ["/blueprints", "Blueprints"], ["/experiments", "Experiments"], ["/proposals", "AI Architect"], ["/failures", "Failures"], ["/releases", "Releases"]];
   const [tk, setTk] = useState(tok());
   return (
@@ -250,6 +250,47 @@ function Blueprints() {
   </Page>;
 }
 
+function DeepResearch() {
+  const [projects, setProjects] = useState([]);
+  const [pid, setPid] = useState("");
+  const [obj, setObj] = useState("");
+  const [run, setRun] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => { api("/projects").then(setProjects).catch(() => {}); }, []);
+  const start = () =>
+    api(`/projects/${pid}/research`,
+        { method: "POST", body: JSON.stringify({ objective: obj }) })
+      .then(setRun).catch((e) => setErr(String(e)));
+  const exec = () =>
+    api(`/research/${pid}/${run.id}/run`, { method: "POST" })
+      .then((s) => setRun({ ...run, state: s }))
+      .catch((e) => setErr(String(e)));
+  const show = () =>
+    api(`/research/${pid}/${run.id}`).then((s) =>
+      setRun({ ...run, state: s })).catch(() => {});
+  const st = run && run.state ? run.state : null;
+  return <Page><h2>Deep Research</h2>
+    <select value={pid} onChange={(e) => setPid(e.target.value)}>
+      <option value="">project…</option>
+      {projects.map((p) => <option key={p.id} value={p.id}>{p.id}</option>)}
+    </select>
+    <input value={obj} onChange={(e) => setObj(e.target.value)}
+      placeholder="research objective" style={{ width: 420, marginLeft: 8 }} />
+    <button onClick={start} disabled={!pid || !obj}>Plan</button>
+    {err && <p style={{ color: "#f88" }}>{err}</p>}
+    {st && <div style={card}>
+      <b>{run.id}</b> [{st.status}] model: {st.model}
+      <div style={{ fontSize: 12 }}>queries: {(st.plan.queries || [])
+        .join(" · ")}</div>
+      {st.status !== "completed" && <>
+        <button onClick={exec}>Run (bounded)</button>
+        <button onClick={show}>Refresh</button></>}
+      {st.report_md && <pre style={{ fontSize: 12, whiteSpace: "pre-wrap",
+        maxHeight: 500, overflow: "auto" }}>{st.report_md}</pre>}
+    </div>}
+  </Page>;
+}
+
 const card = { border: "1px solid #333", borderRadius: 6, padding: 12,
                margin: "8px 0", background: "#16181d" };
 const Page = ({ children }) => (
@@ -261,6 +302,7 @@ export default function App() {
     <Route path="/" element={<Overview />} />
     <Route path="/projects" element={<Projects />} />
     <Route path="/explorer" element={<Explorer />} />
+    <Route path="/deep" element={<DeepResearch />} />
     <Route path="/skills" element={<Skills />} />
     <Route path="/blueprints" element={<Blueprints />} />
     <Route path="/experiments" element={<Experiments />} />
