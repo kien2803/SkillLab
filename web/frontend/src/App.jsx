@@ -16,7 +16,8 @@ const api = (p, opts = {}) =>
 function Nav() {
   const items = [["/", "Overview"], ["/projects", "Research"],
                  ["/explorer", "Web Explorer"], ["/skills", "Skill Studio"],
-                 ["/releases", "Releases"]];
+                 ["/proposals", "AI Architect"], ["/failures", "Failures"], ["/releases", "Releases"]];
+  const [tk, setTk] = useState(tok());
   return (
     <nav style={{ display: "flex", gap: 16, borderBottom: "1px solid #333",
                   padding: "8px 24px", fontFamily: "monospace" }}>
@@ -26,6 +27,12 @@ function Nav() {
           style={({ isActive }) => ({
             color: isActive ? "#7aa2ff" : "#aaa",
             textDecoration: "none" })}>{label}</NavLink>))}
+      <span style={{ flex: 1 }} />
+      <input value={tk} placeholder="api token"
+        onChange={(e) => { setTk(e.target.value);
+          localStorage.setItem(TOKEN_KEY, e.target.value); }}
+        style={{ width: 180, background: "#16181d", color: "#ddd",
+                 border: "1px solid #333", padding: "2px 6px" }} />
     </nav>);
 }
 
@@ -118,7 +125,7 @@ function Skills() {
             <a href="#" onClick={() =>
               api(`/skills/${s.id}@${v.id}/preview`).then(setPv)}>
               {v.id}</a></span>))}
-        {v_note(s)}</div>))}
+        </div>))}
     {pv && <div style={card}>
       <h3>{pv.ref} — {pv.entry} ~{pv.tokens} tok</h3>
       <pre style={{ fontSize: 12 }}>{JSON.stringify(pv.fm, null, 1)}</pre>
@@ -128,7 +135,53 @@ function Skills() {
         <li key={i}>{r}</li>)}</ul></div>}
   </Page>;
 }
-const v_note = (s) => null;
+function Proposals() {
+  const [list, setList] = useState([]);
+  const [msg, setMsg] = useState("");
+  const load = () => api("/proposals").then(setList).catch(() => {});
+  useEffect(load, []);
+  const act = (id, a) =>
+    api(`/proposals/${id}/${a}`, { method: "POST" })
+      .then(() => { setMsg(`${id} ${a}d`); load(); })
+      .catch((e) => setMsg(String(e)));
+  return <Page><h2>AI Architect — Proposals</h2>
+    {msg && <p style={{ color: "#8f8" }}>{msg}</p>}
+    {list.map((p) => <div key={p.id} style={card}>
+      <b>{p.id}</b> [{p.status}] {p.skill}@{p.variant}
+      <div style={{ fontSize: 12, color: "#888" }}>{p.finding}</div>
+      <div style={{ fontSize: 13 }}>{p.patch ? p.patch.summary : ""}</div>
+      {p.diff_preview
+        ? <pre style={{ fontSize: 11, maxHeight: 160, overflow: "auto",
+            background: "#0a0c0f", padding: 8 }}>
+            {p.diff_preview.slice(0, 3000)}</pre>
+        : null}
+      {p.status === "pending"
+        ? <span><button onClick={() => act(p.id, "approve")}>Approve</button>
+          <button onClick={() => act(p.id, "reject")}>Reject</button></span>
+        : null}
+      {p.status === "approved"
+        ? <button onClick={() => act(p.id, "apply")}>Apply</button>
+        : null}
+    </div>)}</Page>;
+}
+
+function Failures() {
+  const [list, setList] = useState([]);
+  useEffect(() => { api("/failures").then(setList).catch(() => {}); }, []);
+  return <Page><h2>Failure Analysis</h2>
+    {list.map((f, i) => (
+      <div key={i} style={card}>
+        <b>{f.run_id}</b> [{f.verdict}] {f.skill_ref}
+        {(f.causes || []).map((c, j) => (
+          <div key={j} style={{ fontSize: 13, marginTop: 4 }}>
+            <b style={{ color: "#f88" }}>{c.category}</b> — {c.hypothesis}
+            <div style={{ color: "#888", fontSize: 12 }}>{c.evidence}</div>
+          </div>))}
+        {(f.proposals || []).map((p, j) => (
+          <div key={j} style={{ fontSize: 12, marginTop: 4,
+                                color: "#ad7" }}>→ {p.change}</div>))}
+      </div>))}</Page>;
+}
 
 function Releases() {
   const [list, setList] = useState([]);
@@ -153,6 +206,8 @@ export default function App() {
     <Route path="/projects" element={<Projects />} />
     <Route path="/explorer" element={<Explorer />} />
     <Route path="/skills" element={<Skills />} />
+    <Route path="/proposals" element={<Proposals />} />
+    <Route path="/failures" element={<Failures />} />
     <Route path="/releases" element={<Releases />} />
   </Routes></>);
 }
