@@ -1,0 +1,37 @@
+run_id: reg-commit-helper-v1-v3-bp-01--baseline--unrelated-refactor--r1
+experiment: reg-commit-helper-v1-v3-bp-01
+arm: baseline
+task: unrelated-refactor
+model:
+  name: mock
+  temperature: 0.0
+seed: 1371705658
+injection_mode: available
+skill_ref: commit-helper@v1
+skill_hash: sha256:971c5f8dc58349e9
+status: ok
+error: null
+started: '2026-11-20T12:25:47.199357+00:00'
+finished: '2026-11-20T12:25:47.200925+00:00'
+usage:
+  input_tokens: 377
+  output_tokens: 9
+  turns: 2
+skill_events:
+- t: 0
+  event: offered
+  skill: commit-helper
+  path: null
+- t: 0
+  event: offered
+  skill: code-review
+  path: null
+- t: 0
+  event: offered
+  skill: diagnosing-bugs
+  path: null
+- t: 0
+  event: offered
+  skill: grill-with-docs
+  path: null
+final_message: Done — wrote OUTPUT.md with the result.

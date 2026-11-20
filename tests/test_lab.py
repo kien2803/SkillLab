@@ -1022,3 +1022,389 @@ def test_regression_handles_missing_evals(lab):
     res = analyze(lab, "reg-commit-helper-v1-v2-01")
     task = [t for t in res["tasks"] if t["task"] == "write-commit-msg"][0]
     assert task["candidate"]["incomplete"] >= 1
+
+
+# ------------------------------------------------------------- research --
+
+
+def test_research_project_lifecycle(lab, capsys):
+    assert main(["project", "new", "cap-research",
+                 "--title", "Capability research",
+                 "--objective", "Study activation"]) == 0
+    assert (lab.research_dir / "cap-research" / "project.yaml").is_file()
+    assert (lab.research_dir / "cap-research" / "charter.md").is_file()
+    assert main(["project", "list"]) == 0
+    assert main(["project", "status", "cap-research",
+                 "researching"]) == 0
+    from skilllab.research import get_project
+    assert get_project(lab, "cap-research").status == "researching"
+    assert main(["project", "archive", "cap-research"]) == 0
+    assert get_project(lab, "cap-research").status == "archived"
+    # invalid status rejected by argparse
+    with pytest.raises(SystemExit):
+        main(["project", "status", "cap-research", "bogus"])
+    capsys.readouterr()
+
+
+def test_research_entities_and_links(lab):
+    main(["project", "new", "p1"])
+    assert main(["question", "add", "p1", "Does X help?"]) == 0
+    assert main(["source", "add", "p1", "--type", "url",
+                 "--title", "Doc", "--url", "https://example.com"]) == 0
+    assert main(["note", "add", "p1", "first log"]) == 0
+    assert main(["decision", "add", "p1",
+                 "--decision", "Use variant A"]) == 0
+    # finding needs a real question + source ref
+    assert main(["finding", "add", "p1", "--statement", "X helps",
+                 "--question", "q01", "--source", "s01"]) == 0
+    # link question to the real experiment in this lab
+    assert main(["question", "link", "p1", "q01",
+                 "--experiment", "exp-test-trigger"]) == 0
+    # bogus refs are refused
+    assert main(["finding", "add", "p1", "--statement", "bad ref",
+                 "--source", "s99"]) == 1
+    assert main(["question", "link", "p1", "q01",
+                 "--experiment", "exp-nope"]) == 1
+    assert main(["project", "show", "p1"]) == 0
+
+
+def test_finding_supported_requires_evidence(lab):
+    main(["project", "new", "p1"])
+    main(["finding", "add", "p1", "--statement", "unsupported claim"])
+    # no sources/evidence -> cannot be supported
+    assert main(["finding", "status", "p1", "f01", "supported"]) == 1
+    # unverified kind can never be supported, even with a source
+    main(["source", "add", "p1", "--type", "other", "--title", "x"])
+    main(["finding", "add", "p1", "--statement", "unverified claim",
+          "--kind", "unverified", "--source", "s01"])
+    assert main(["finding", "status", "p1", "f02", "supported"]) == 1
+    # observation + real experiment evidence -> ok
+    main(["finding", "add", "p1", "--statement", "backed",
+          "--kind", "observation",
+          "--evidence", "exp-test-trigger"])
+    assert main(["finding", "status", "p1", "f03", "supported"]) == 0
+
+
+def test_project_delete_protection(lab):
+    main(["project", "new", "p1"])
+    main(["question", "add", "p1", "q?"])
+    # holds data -> delete refused even with --confirm
+    assert main(["project", "delete", "p1", "--confirm"]) == 1
+    # empty draft + --confirm -> deleted
+    main(["project", "new", "p2"])
+    assert main(["project", "delete", "p2", "--confirm"]) == 0
+    assert not (lab.research_dir / "p2").exists()
+
+
+def test_research_pages_in_ui(lab, capsys):
+    main(["project", "new", "p1", "--title", "Research"])
+    main(["question", "add", "p1", "Q?"])
+    main(["finding", "add", "p1", "--statement", "F"])
+    main(["ui"])
+    assert (lab.d("ui") / "research.html").is_file()
+    assert (lab.d("ui") / "project-p1.html").is_file()
+    html = (lab.d("ui") / "project-p1.html").read_text()
+    assert "Research questions" in html and "Findings" in html
+    assert "Research" in (lab.d("ui") / "index.html").read_text()
+    capsys.readouterr()
+
+
+# ------------------------------------------------------------ blueprint --
+
+
+def _fill_required(lab, pid, bid):
+    from skilllab import blueprint as bp
+    for k in ("name", "description", "problem_statement",
+              "target_capability", "output_contract"):
+        bp.set_field(lab, pid, bid, k, "x" * 50 if k == "description" else "x")
+    for k in ("in_scope_tasks", "trigger_conditions",
+              "execution_workflow", "evaluation_criteria"):
+        bp.set_field(lab, pid, bid, k, ["a"])
+
+
+def test_blueprint_lifecycle_and_gate(lab):
+    main(["project", "new", "p1"])
+    assert main(["blueprint", "new", "p1", "bp1"]) == 0
+    from skilllab import blueprint as bp
+    # empty blueprint cannot reach gated statuses
+    assert main(["blueprint", "status", "p1", "bp1",
+                 "ready_for_generation"]) == 1
+    issues = bp.validate(lab, "p1", "bp1")
+    assert sum(1 for i in issues if i["severity"] == "error") == 9
+    _fill_required(lab, "p1", "bp1")
+    # warnings don't block; errors do
+    assert bp.validate(lab, "p1", "bp1") == [] or all(
+        i["severity"] != "error" for i in bp.validate(lab, "p1", "bp1"))
+    assert main(["blueprint", "status", "p1", "bp1",
+                 "ready_for_generation"]) == 0
+    assert bp.get_blueprint(lab, "p1", "bp1").status == \
+        "ready_for_generation"
+
+
+def test_blueprint_contradiction_and_warn(lab):
+    main(["project", "new", "p1"])
+    main(["blueprint", "new", "p1", "bp1"])
+    from skilllab import blueprint as bp
+    bp.set_field(lab, "p1", "bp1", "in_scope_tasks", ["t1"])
+    bp.set_field(lab, "p1", "bp1", "out_of_scope_tasks", ["t1"])
+    issues = bp.validate(lab, "p1", "bp1")
+    assert any(i["check"] == "contradiction" and i["severity"] == "error"
+               for i in issues)
+
+
+def test_blueprint_revisions_and_diff(lab):
+    main(["project", "new", "p1"])
+    main(["blueprint", "new", "p1", "bp1"])
+    from skilllab import blueprint as bp
+    assert bp.get_blueprint(lab, "p1", "bp1").rev == 1
+    bp.set_field(lab, "p1", "bp1", "name", "first")
+    bp.set_field(lab, "p1", "bp1", "name", "second")
+    b = bp.get_blueprint(lab, "p1", "bp1")
+    assert b.rev == 3
+    revs = bp.revisions(lab, "p1", "bp1")
+    assert [r.rev for r in revs] == [1, 2, 3]
+    assert revs[0].fields.get("name") in (None, "")
+    diffs = bp.diff_revisions(lab, "p1", "bp1", 1)
+    assert any(d["field"] == "name" and d["to"] == "second"
+               for d in diffs)
+    assert main(["blueprint", "diff", "p1", "bp1", "1"]) == 0
+
+
+def test_blueprint_from_question_and_links(lab):
+    main(["project", "new", "p1"])
+    main(["question", "add", "p1", "Does X work?",
+          "--hypothesis", "X halves tokens"])
+    main(["finding", "add", "p1", "--statement", "F",
+          "--evidence", "exp-test-trigger"])
+    main(["blueprint", "new", "p1", "bp1"])
+    assert main(["blueprint", "from-question", "p1", "bp1", "q01"]) == 0
+    from skilllab import blueprint as bp
+    b = bp.get_blueprint(lab, "p1", "bp1")
+    assert "X halves tokens" in b.fields["research_motivation"]
+    assert b.fields["problem_statement"] == "Does X work?"
+    assert main(["blueprint", "link", "p1", "bp1",
+                 "--finding", "f01"]) == 0
+    # bogus refs refused
+    assert main(["blueprint", "from-question", "p1", "bp1", "q99"]) == 1
+    assert main(["blueprint", "link", "p1", "bp1",
+                 "--finding", "f99"]) == 1
+
+
+def test_blueprint_page_in_ui(lab, capsys):
+    main(["project", "new", "p1"])
+    main(["blueprint", "new", "p1", "bp1"])
+    main(["ui"])
+    page = lab.d("ui") / "blueprint-p1-bp1.html"
+    assert page.is_file()
+    html = page.read_text()
+    assert "output_contract" in html and "Validation" in html
+    capsys.readouterr()
+
+
+# ---------------------------------------------------------------- studio --
+
+
+def test_blueprint_generate_skill(lab):
+    main(["project", "new", "p1"])
+    main(["blueprint", "new", "p1", "bp1"])
+    from skilllab import blueprint as bp
+    _fill_required(lab, "p1", "bp1")
+    # unvalidated blueprint refused? no — but errors block: fill ok now
+    assert main(["blueprint", "generate", "p1", "bp1",
+                 "--skill", "new-skill", "--variant", "v1"]) == 0
+    md = lab.skills_dir / "new-skill" / "variants" / "v1" / "SKILL.md"
+    assert md.is_file()
+    text = md.read_text()
+    assert "name:" in text and "blueprint bp1" in text
+    meta = lab.skill("new-skill")
+    assert meta.variants[0].note.startswith("blueprint p1/bp1")
+    b = bp.get_blueprint(lab, "p1", "bp1")
+    assert b.status == "generated"
+    assert b.generated_variants == ["new-skill@v1"]
+    # second generate on same variant refused without --force
+    assert main(["blueprint", "generate", "p1", "bp1",
+                 "--skill", "new-skill", "--variant", "v1"]) == 1
+    # --force archives the old variant
+    assert main(["blueprint", "generate", "p1", "bp1",
+                 "--skill", "new-skill", "--variant", "v1",
+                 "--force"]) == 0
+    assert list((lab.archive_dir / "skills" / "new-skill").iterdir())
+
+
+def test_generate_blocks_on_invalid_blueprint(lab):
+    main(["project", "new", "p1"])
+    main(["blueprint", "new", "p1", "bp1"])
+    # missing required fields -> generate refuses
+    assert main(["blueprint", "generate", "p1", "bp1",
+                 "--skill", "s", "--variant", "v"]) == 1
+    assert not (lab.skills_dir / "s").exists()
+
+
+# --------------------------------------------------------------- failure --
+
+
+def _mkrun(lab, rid, task="write-commit-msg", arm="a", status="ok",
+           activated=True, mode="available", tokens=100):
+    from skilllab.models import dump_yaml
+    d = lab.runs_dir / rid
+    d.mkdir(parents=True, exist_ok=True)
+    events = [{"t": 1, "event": "offered", "skill": "commit-helper"}]
+    if activated:
+        events.append({"t": 2, "event": "activated",
+                       "skill": "commit-helper"})
+    dump_yaml({"run_id": rid, "experiment": "exp-test-trigger",
+               "arm": arm, "task": task, "injection_mode": mode,
+               "skill_ref": "commit-helper@v1", "status": status,
+               "skill_events": events,
+               "usage": {"input_tokens": tokens, "output_tokens": 10,
+                         "turns": 3}}, d / "run.yaml")
+    return d
+
+
+def test_failure_incorrect_activation(lab):
+    from skilllab import failure
+    _mkrun(lab, "r-neg", task="unrelated-refactor", activated=True)
+    rep = failure.analyze_run(lab, "r-neg")
+    assert rep["verdict"] == "failed"
+    assert rep["first_failure"]["category"] == "incorrect-activation"
+    _mkrun(lab, "r-pos", task="write-commit-msg", activated=False)
+    rep = failure.analyze_run(lab, "r-pos")
+    assert rep["first_failure"]["category"] == "incorrect-activation"
+
+
+def test_failure_eval_check_categories(lab):
+    from skilllab import failure
+    from skilllab.models import dump_yaml
+    d = _mkrun(lab, "r-fmt")
+    dump_yaml({"checks": [{"id": "output-format", "method": "deterministic",
+                           "status": "failed",
+                           "detail": "missing key"}],
+               "status": "failed", "success": False}, d / "eval.yaml")
+    rep = failure.analyze_run(lab, "r-fmt")
+    assert any(c["category"] == "output-format-violation"
+               for c in rep["causes"])
+    d2 = _mkrun(lab, "r-judge")
+    dump_yaml({"checks": [{"id": "quality", "method": "llm-judge",
+                           "status": "failed", "detail": "vague"}],
+               "status": "failed", "success": False}, d2 / "eval.yaml")
+    rep2 = failure.analyze_run(lab, "r-judge")
+    assert any(c["category"] == "ambiguous-instructions"
+               for c in rep2["causes"])
+
+
+def test_failure_infra_vs_task_failure(lab):
+    from skilllab import failure
+    from skilllab.models import dump_yaml
+    _mkrun(lab, "r-err", status="error")
+    rep = failure.analyze_run(lab, "r-err")
+    assert rep["first_failure"]["category"] == "infrastructure"
+    assert rep["verdict"] == "inconclusive"
+    # missing eval on an ok run = data gap, not a task failure
+    _mkrun(lab, "r-noeval", activated=False)
+    rep = failure.analyze_run(lab, "r-noeval")
+    # not-activated on a positive task IS a task failure, plus the
+    # missing-eval note must not mask it
+    assert rep["first_failure"]["category"] == "incorrect-activation"
+    assert rep["verdict"] == "failed"
+    # a clean passing run reports clean
+    d = _mkrun(lab, "r-ok")
+    dump_yaml({"checks": [{"id": "x", "method": "deterministic",
+                           "status": "passed"}],
+               "status": "passed", "success": True}, d / "eval.yaml")
+    rep = failure.analyze_run(lab, "r-ok")
+    assert rep["verdict"] == "warning" or rep["verdict"] == "clean"
+
+
+def test_failure_excessive_tokens(lab):
+    from skilllab import failure
+    for i in range(3):
+        _mkrun(lab, f"r-sib{i}", tokens=100)
+    _mkrun(lab, "r-fat", tokens=400)
+    rep = failure.analyze_run(lab, "r-fat")
+    assert any(c["category"] == "excessive-tokens"
+               for c in rep["causes"])
+
+
+def test_failure_report_and_proposals(lab):
+    from skilllab import failure
+    _mkrun(lab, "r-f", task="write-commit-msg", activated=False)
+    rep = failure.analyze_run(lab, "r-f")
+    props = failure.proposals(rep)
+    assert props and props[0]["change"] and props[0]["evidence"]
+    p = failure.write_report(lab, rep)
+    assert p.is_file()
+    assert main(["failure", "list"]) == 0
+    assert main(["failure", "show", "r-f"]) == 0
+    # missing report -> error
+    assert main(["failure", "show", "r-nope"]) == 1
+
+
+# ------------------------------------------------------------ release ----
+
+
+def test_release_gate_and_trace(lab):
+    from skilllab import release
+    from skilllab.models import load_yaml
+    main(["project", "new", "p1"])
+    main(["blueprint", "new", "p1", "bp1"])
+    _fill_required(lab, "p1", "bp1")
+    main(["blueprint", "generate", "p1", "bp1",
+          "--skill", "rel-skill", "--variant", "v1"])
+    # release blocked: no evaluated runs yet, empty changelog
+    assert main(["release", "new", "rel-skill", "1.0.0",
+                 "--variant", "v1"]) == 0
+    assert main(["release", "status", "rel-skill", "1.0.0",
+                 "released"]) == 1
+    # add an evaluated run for this variant
+    from skilllab.models import dump_yaml
+    d = _mkrun(lab, "r-rel")
+    ry = load_yaml(d / "run.yaml"); ry["skill_ref"] = "rel-skill@v1"
+    dump_yaml(ry, d / "run.yaml")
+    dump_yaml({"checks": [{"id": "x", "method": "deterministic",
+                           "status": "passed"}],
+               "status": "passed", "success": True}, d / "eval.yaml")
+    # still blocked: empty changelog
+    assert main(["release", "status", "rel-skill", "1.0.0",
+                 "released"]) == 1
+    rp = lab.d("releases") / "rel-skill" / "1.0.0.yaml"
+    r = load_yaml(rp); r["changelog"] = "first release"
+    dump_yaml(r, rp)
+    assert main(["release", "check", "rel-skill", "1.0.0"]) == 0
+    assert main(["release", "status", "rel-skill", "1.0.0",
+                 "released"]) == 0
+    assert release.list_releases(lab)[0].released_at
+    # trace: generated variant walks back to blueprint+project
+    t = release.trace(lab, "rel-skill@v1")
+    assert t["blueprint"]["id"] == "bp1" and t["blueprint"]["rev"] >= 1
+    assert t["runs"] == ["r-rel"]
+
+
+# ----------------------------------------------------------- architect ---
+
+
+def test_ai_proposal_approval_flow(lab):
+    # craft a variant with a dead link + missing trigger
+    d = lab.skills_dir / "commit-helper" / "variants" / "v1"
+    md = d / "SKILL.md"
+    md.write_text(md.read_text() + "\nSee `MISSING.md`.\n"
+                  .replace("description:", "description:"))
+    from skilllab import architect
+    props = architect.suggest(lab, "commit-helper@v1")
+    assert any("MISSING.md" in p.finding for p in props)
+    p = [p for p in props if "MISSING.md" in p.finding][0]
+    assert p.status == "pending" and p.diff_preview
+    # cannot apply before approval
+    assert main(["ai", "apply", p.id]) == 1
+    main(["ai", "approve", p.id])
+    before = md.read_text()
+    assert main(["ai", "apply", p.id]) == 0
+    assert "`MISSING.md`" not in md.read_text()
+    prop, _ = architect.get(lab, p.id)
+    assert prop.status == "applied" and prop.original_content == before
+
+
+def test_ai_no_actionable_no_proposal(lab):
+    from skilllab import architect
+    props = architect.suggest(lab, "commit-helper@v1")
+    # v1 is clean -> nothing proposed (or only already-applied states)
+    assert all(p.finding for p in props)

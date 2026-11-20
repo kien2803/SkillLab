@@ -1,0 +1,74 @@
+id: reg-commit-helper-v1-v3-bp-01
+verdict: inconclusive
+counts:
+  critical: 0
+  quality: 0
+  activation: 0
+  false-activation: 0
+  efficiency: 0
+  stability: 0
+tasks:
+- task: unrelated-refactor
+  kind: activation-negative
+  categories: []
+  improvements: []
+  notes:
+  - insufficient runs (n=2v2, min=3)
+  baseline:
+    n_runs: 2
+    errors: 0
+    error_rate: 0.0
+    n_final: 2
+    incomplete: 0
+    success: 1.0
+    score: 1.0
+    activated: 0.0
+    tokens: 386
+    latency: 0.001763
+    turns: 2
+    variance: 0.0
+  candidate:
+    n_runs: 2
+    errors: 0
+    error_rate: 0.0
+    n_final: 2
+    incomplete: 0
+    success: 1.0
+    score: 1.0
+    activated: 0.0
+    tokens: 369
+    latency: 0.0015105000000000001
+    turns: 2
+    variance: 0.0
+- task: write-commit-msg
+  kind: activation-positive
+  categories: []
+  improvements: []
+  notes:
+  - insufficient runs (n=2v2, min=3)
+  baseline:
+    n_runs: 2
+    errors: 0
+    error_rate: 0.0
+    n_final: 2
+    incomplete: 0
+    success: 1.0
+    score: 1.0
+    activated: 0.0
+    tokens: 394
+    latency: 0.0017865
+    turns: 3
+    variance: 0.0
+  candidate:
+    n_runs: 2
+    errors: 0
+    error_rate: 0.0
+    n_final: 2
+    incomplete: 0
+    success: 1.0
+    score: 1.0
+    activated: 0.0
+    tokens: 377
+    latency: 0.001747
+    turns: 3
+    variance: 0.0

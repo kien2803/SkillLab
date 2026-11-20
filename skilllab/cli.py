@@ -11,6 +11,8 @@ import yaml
 from .lab import Lab, LabError
 from .models import (Arm, Check, Experiment, FixedConfig, RunRecord,
                      SkillRelevance, TaskSpec, dump_yaml, load_yaml)
+from . import research
+from . import blueprint as bp_mod
 
 TASK_TEMPLATE = """\
 id: {tid}
@@ -650,6 +652,440 @@ def cmd_regression_list(args) -> int:
 
 # ------------------------------------------------------------------- parser --
 
+# ---------- research projects ----------
+
+def cmd_project_new(args) -> int:
+    d = research.new_project(_lab(args), args.id, args.title,
+                             args.objective, args.problem)
+    print(f"created research project {d.name} → {d}")
+    return 0
+
+
+def cmd_project_list(args) -> int:
+    lab = _lab(args)
+    for m in research.list_projects(lab):
+        print(f"{m.id:<30} {m.status:<14} {m.title}")
+    return 0
+
+
+def cmd_project_show(args) -> int:
+    lab = _lab(args)
+    s = research.project_summary(lab, args.id)
+    m = s["meta"]
+    print(f"{m.id} — {m.title}  [{m.status}]")
+    if m.objective:
+        print(f"  objective : {m.objective}")
+    if m.problem:
+        print(f"  problem   : {m.problem}")
+    for key, label in (("questions", "questions"), ("sources", "sources"),
+                       ("notes", "notes"), ("findings", "findings"),
+                       ("decisions", "decisions")):
+        items = s[key]
+        print(f"  {label:<9}: {len(items)}")
+        for it in items[:5]:
+            ident = getattr(it, "id", it.get("id") if isinstance(it, dict) else "?")
+            st = getattr(it, "status", "")
+            txt = getattr(it, "question", "") or getattr(it, "title", "") \
+                or getattr(it, "statement", "") or getattr(it, "decision", "") \
+                or (it.get("path", "") if isinstance(it, dict) else "")
+            print(f"    {ident} {('['+st+']') if st else ''} {txt[:70]}")
+    return 0
+
+
+def cmd_project_status(args) -> int:
+    research.set_status(_lab(args), args.id, args.status)
+    print(f"{args.id} → {args.status}")
+    return 0
+
+
+def cmd_project_archive(args) -> int:
+    research.archive_project(_lab(args), args.id)
+    print(f"{args.id} archived")
+    return 0
+
+
+def cmd_project_delete(args) -> int:
+    research.delete_project(_lab(args), args.id, confirm=args.confirm)
+    print(f"{args.id} deleted")
+    return 0
+
+
+def cmd_question_add(args) -> int:
+    q = research.add_question(_lab(args), args.project, args.text,
+                              args.objective, args.hypothesis)
+    print(f"{q.id}: {q.question}")
+    return 0
+
+
+def cmd_question_list(args) -> int:
+    for q in research.list_questions(_lab(args), args.project):
+        print(f"{q.id} [{q.status}] {q.question}")
+    return 0
+
+
+def cmd_question_status(args) -> int:
+    research.set_question_status(_lab(args), args.project, args.qid,
+                                 args.status)
+    print(f"{args.qid} → {args.status}")
+    return 0
+
+
+def cmd_question_link(args) -> int:
+    lab = _lab(args)
+    if args.finding:
+        research.link_question(lab, args.project, args.qid, "findings",
+                               args.finding)
+        print(f"{args.qid} ← finding {args.finding}")
+    if args.experiment:
+        research.link_question(lab, args.project, args.qid, "experiments",
+                               args.experiment)
+        print(f"{args.qid} ← experiment {args.experiment}")
+    return 0
+
+
+def cmd_source_add(args) -> int:
+    s = research.add_source(_lab(args), args.project, args.type,
+                            args.title, url=args.url or "",
+                            path=args.path or "", author=args.author or "",
+                            excerpt=args.excerpt or "")
+    print(f"{s.id}: {s.title} [{s.type}]")
+    return 0
+
+
+def cmd_source_list(args) -> int:
+    for s in research.list_sources(_lab(args), args.project):
+        loc = s.url or s.path or "-"
+        print(f"{s.id} [{s.type}] {s.title} — {loc}")
+    return 0
+
+
+def cmd_source_annotate(args) -> int:
+    research.annotate_source(_lab(args), args.project, args.sid,
+                             args.note)
+    print(f"{args.sid} annotated")
+    return 0
+
+
+def cmd_note_add(args) -> int:
+    p = research.add_note(_lab(args), args.project, args.title)
+    print(f"note → {p}")
+    return 0
+
+
+def cmd_note_list(args) -> int:
+    for n in research.list_notes(_lab(args), args.project):
+        print(f"{n['id']:<30} {n['created']}")
+    return 0
+
+
+def cmd_finding_add(args) -> int:
+    f = research.add_finding(
+        _lab(args), args.project, args.statement, args.kind,
+        question=args.question or "", confidence=args.confidence,
+        sources=args.source or [], evidence=args.evidence or [],
+        limitations=args.limitations or "")
+    print(f"{f.id}: {f.statement[:80]} [{f.kind}/{f.status}]")
+    return 0
+
+
+def cmd_finding_list(args) -> int:
+    for f in research.list_findings(_lab(args), args.project):
+        print(f"{f.id} [{f.status}/{f.kind}/{f.confidence}] "
+              f"{f.statement[:70]}")
+    return 0
+
+
+def cmd_finding_status(args) -> int:
+    research.set_finding_status(_lab(args), args.project, args.fid,
+                                args.status)
+    print(f"{args.fid} → {args.status}")
+    return 0
+
+
+def cmd_decision_add(args) -> int:
+    d = research.add_decision(_lab(args), args.project, args.decision,
+                              args.rationale or "", args.alt or [])
+    print(f"{d.id}: {d.decision[:80]}")
+    return 0
+
+
+def cmd_decision_list(args) -> int:
+    for d in research.list_decisions(_lab(args), args.project):
+        print(f"{d.id} [{d.status}] {d.decision}")
+    return 0
+
+
+def cmd_decision_status(args) -> int:
+    research.set_decision_status(_lab(args), args.project, args.did,
+                                 args.status)
+    print(f"{args.did} → {args.status}")
+    return 0
+
+
+# ---------- blueprints ----------
+
+def cmd_bp_new(args) -> int:
+    d = bp_mod.new_blueprint(_lab(args), args.project, args.id,
+                             args.title)
+    print(f"created blueprint {d.name} → {d}")
+    return 0
+
+
+def cmd_bp_list(args) -> int:
+    for b in bp_mod.list_blueprints(_lab(args), args.project):
+        print(f"{b.id:<30} r{b.rev:<3} [{b.status}] {b.title}")
+    return 0
+
+
+def cmd_bp_show(args) -> int:
+    lab = _lab(args)
+    b = bp_mod.get_blueprint(lab, args.project, args.id)
+    print(f"{b.id} — {b.title}  [{b.status}] rev r{b.rev}")
+    for key, kind, req, label in bp_mod.FIELDS:
+        v = b.fields.get(key)
+        mark = "*" if req else " "
+        if isinstance(v, list):
+            print(f" {mark}{key}:")
+            for item in v:
+                print(f"    - {item}")
+        elif v:
+            print(f" {mark}{key}: {v}")
+        else:
+            print(f" {mark}{key}: —")
+    if b.related_findings:
+        print(f"  findings: {', '.join(b.related_findings)}")
+    issues = bp_mod.validate(lab, args.project, args.id)
+    for i in issues:
+        print(f"  [{i['severity']}] {i['field']}: {i['message']}")
+    if not issues:
+        print("  validation: clean")
+    return 0
+
+
+def cmd_bp_set(args) -> int:
+    lab = _lab(args)
+    if not args.set and not args.add:
+        raise LabError("pass --set FIELD=VALUE or --add FIELD=VALUE")
+    for spec in (args.set or []):
+        key, _, val = spec.partition("=")
+        bp_mod.set_field(lab, args.project, args.id, key.strip(), val)
+        print(f"{args.id}.{key.strip()} set → r"
+              f"{bp_mod.get_blueprint(lab, args.project, args.id).rev}")
+    for spec in (args.add or []):
+        key, _, val = spec.partition("=")
+        bp_mod.set_field(lab, args.project, args.id, key.strip(), val,
+                         append=True)
+        print(f"{args.id}.{key.strip()} += {val}")
+    return 0
+
+
+def cmd_bp_from_question(args) -> int:
+    bp_mod.from_question(_lab(args), args.project, args.id, args.qid)
+    print(f"{args.id} prefilled from {args.qid}")
+    return 0
+
+
+def cmd_bp_link(args) -> int:
+    bp_mod.link_finding(_lab(args), args.project, args.id, args.finding)
+    print(f"{args.id} ← finding {args.finding}")
+    return 0
+
+
+def cmd_bp_status(args) -> int:
+    b = bp_mod.set_status(_lab(args), args.project, args.id, args.status)
+    print(f"{args.id} → {b.status} (r{b.rev})")
+    return 0
+
+
+def cmd_bp_validate(args) -> int:
+    issues = bp_mod.validate(_lab(args), args.project, args.id)
+    for i in issues:
+        print(f"[{i['severity']}] {i['field']}: {i['message']}")
+    if not issues:
+        print("clean")
+    return 1 if any(i["severity"] == "error" for i in issues) else 0
+
+
+def cmd_bp_revisions(args) -> int:
+    for b in bp_mod.revisions(_lab(args), args.project, args.id):
+        print(f"r{b.rev:<3} [{b.status}] {b.updated}")
+    return 0
+
+
+def cmd_bp_diff(args) -> int:
+    diffs = bp_mod.diff_revisions(_lab(args), args.project, args.id,
+                                  args.from_rev, args.to_rev)
+    if not diffs:
+        print("no changes")
+        return 0
+    for d in diffs:
+        print(f"{d['field']} (r{d['from_rev']}→r{d['to_rev']}):")
+        print(f"  - {d['from']}")
+        print(f"  + {d['to']}")
+    return 0
+
+
+def cmd_bp_generate(args) -> int:
+    from . import studio
+    p = studio.generate_skill(_lab(args), args.project, args.id,
+                              args.skill, args.variant,
+                              fmt=args.format, force=args.force)
+    print(f"generated {p}")
+    return 0
+
+
+# ---------- failure analysis ----------
+
+def cmd_failure_analyze(args) -> int:
+    from . import failure
+    lab = _lab(args)
+    rep = failure.analyze_run(lab, args.run_id)
+    print(f"{rep['run_id']} [{rep['verdict']}] "
+          f"{rep['experiment']}/{rep['arm']}/{rep['task']}")
+    for c in rep["causes"]:
+        print(f"  [{c['category']}] {c['hypothesis']}")
+        print(f"      evidence: {c['evidence']}")
+    if not rep["causes"]:
+        print("  no failures detected")
+    if args.write:
+        p = failure.write_report(lab, rep)
+        print(f"report → {p}")
+    return 0
+
+
+def cmd_failure_list(args) -> int:
+    lab = _lab(args)
+    d = lab.d("failures")
+    if d.is_dir():
+        for p in sorted(d.glob("*.yaml")):
+            r = load_yaml(p)
+            print(f"{r['run_id']:<55} [{r['verdict']}] "
+                  f"{len(r.get('causes', []))} causes")
+    return 0
+
+
+def cmd_failure_show(args) -> int:
+    lab = _lab(args)
+    p = lab.d("failures") / f"{args.run_id}.yaml"
+    if not p.is_file():
+        raise LabError(f"no failure report for '{args.run_id}' — "
+                       "run `lab failure analyze <run> --write`")
+    r = load_yaml(p)
+    print(f"{r['run_id']} [{r['verdict']}]")
+    for pr in r.get("proposals", []):
+        print(f"\n[{pr['category']}] {pr['problem']}")
+        print(f"  change  : {pr['change']}")
+        print(f"  impact  : {pr['expected_impact']}")
+        print(f"  side-fx : {pr['side_effects']}")
+    return 0
+
+
+# ---------- release + trace ----------
+
+def cmd_release_new(args) -> int:
+    from . import release
+    p = release.new_release(_lab(args), args.skill, args.version,
+                            args.variant, args.changelog)
+    print(f"release → {p}")
+    return 0
+
+
+def cmd_release_list(args) -> int:
+    from . import release
+    for r in release.list_releases(_lab(args), args.skill):
+        print(f"{r.skill}@{r.version:<10} [{r.status}] "
+              f"variant={r.variant or '-'} {r.released_at}")
+    return 0
+
+
+def cmd_release_check(args) -> int:
+    from . import release
+    checks = release.checklist(_lab(args), args.skill, args.version)
+    for c in checks:
+        mark = "PASS" if c["ok"] else ("FAIL" if c["required"] else "warn")
+        print(f"[{mark}] {c['id']:<20} {c['detail']}")
+    return 1 if any(c["required"] and not c["ok"] for c in checks) else 0
+
+
+def cmd_release_status(args) -> int:
+    from . import release
+    release.set_status(_lab(args), args.skill, args.version, args.status)
+    print(f"{args.skill}@{args.version} → {args.status}")
+    return 0
+
+
+def cmd_trace(args) -> int:
+    from . import release
+    t = release.trace(_lab(args), args.ref)
+    print(f"skill     : {t['skill']}@{t['variant']} ({t['variant_path']})")
+    if t["blueprint"]:
+        b = t["blueprint"]
+        print(f"blueprint : {b['project']}/{b['id']} "
+              f"(created at r{b['rev']}, now r{b.get('rev_current')}) "
+              f"[{b.get('status')}]")
+        if t["project"]:
+            print(f"project   : {t['project']}")
+    for q in t["questions"]:
+        print(f"question  : {q['id']} [{q['status']}] {q['question'][:60]}")
+    for f in t["findings"]:
+        print(f"finding   : {f['id']} [{f['status']}] {f['statement']}")
+    for e in t["experiments"]:
+        print(f"experiment: {e}")
+    print(f"runs      : {len(t['runs'])} run(s) on this variant")
+    for i in t["insights"]:
+        print(f"{i['kind']:<9}: {i['id']} [{i['status']}]")
+    return 0
+
+
+# ---------- ai architect ----------
+
+def cmd_ai_suggest(args) -> int:
+    from . import architect
+    props = architect.suggest(_lab(args), args.ref)
+    for p in props:
+        print(f"{p.id} [{p.status}] {p.finding}")
+        print(f"      → {p.patch['summary']}")
+    if not props:
+        print("no actionable findings — nothing proposed")
+    return 0
+
+
+def cmd_ai_list(args) -> int:
+    from . import architect
+    for p in architect.list_proposals(_lab(args)):
+        print(f"{p.id} [{p.status}] {p.skill}@{p.variant} — {p.finding[:60]}")
+    return 0
+
+
+def cmd_ai_show(args) -> int:
+    from . import architect
+    p, _ = architect.get(_lab(args), args.id)
+    print(f"{p.id} [{p.status}] {p.skill}@{p.variant}")
+    print(p.diff_preview or architect.preview(_lab(args), p))
+    return 0
+
+
+def cmd_ai_approve(args) -> int:
+    from . import architect
+    architect.set_status(_lab(args), args.id, "approved")
+    print(f"{args.id} approved")
+    return 0
+
+
+def cmd_ai_reject(args) -> int:
+    from . import architect
+    architect.set_status(_lab(args), args.id, "rejected")
+    print(f"{args.id} rejected")
+    return 0
+
+
+def cmd_ai_apply(args) -> int:
+    from . import architect
+    p = architect.apply(_lab(args), args.id)
+    print(f"{args.id} applied → {p}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lab", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -705,6 +1141,72 @@ def build_parser() -> argparse.ArgumentParser:
     x = ss.add_parser("promote"); x.add_argument("id"); x.set_defaults(f=cmd_insight_promote)
     x = ss.add_parser("refute"); x.add_argument("id"); x.set_defaults(f=cmd_insight_refute)
     x = ss.add_parser("confirm"); x.add_argument("id"); x.set_defaults(f=cmd_insight_confirm)
+
+    s = sub.add_parser("project"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("new"); x.add_argument("id"); x.add_argument("--title", default=""); x.add_argument("--objective", default=""); x.add_argument("--problem", default=""); x.set_defaults(f=cmd_project_new)
+    x = ss.add_parser("list"); x.set_defaults(f=cmd_project_list)
+    x = ss.add_parser("show"); x.add_argument("id"); x.set_defaults(f=cmd_project_show)
+    x = ss.add_parser("status"); x.add_argument("id"); x.add_argument("status", choices=["draft", "active", "researching", "designing", "developing", "experimenting", "validating", "completed", "archived"]); x.set_defaults(f=cmd_project_status)
+    x = ss.add_parser("archive"); x.add_argument("id"); x.set_defaults(f=cmd_project_archive)
+    x = ss.add_parser("delete"); x.add_argument("id"); x.add_argument("--confirm", action="store_true"); x.set_defaults(f=cmd_project_delete)
+
+    s = sub.add_parser("question"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("add"); x.add_argument("project"); x.add_argument("text"); x.add_argument("--objective", default=""); x.add_argument("--hypothesis", default=""); x.set_defaults(f=cmd_question_add)
+    x = ss.add_parser("list"); x.add_argument("project"); x.set_defaults(f=cmd_question_list)
+    x = ss.add_parser("status"); x.add_argument("project"); x.add_argument("qid"); x.add_argument("status", choices=["open", "investigating", "answered", "deferred"]); x.set_defaults(f=cmd_question_status)
+    x = ss.add_parser("link"); x.add_argument("project"); x.add_argument("qid"); x.add_argument("--finding"); x.add_argument("--experiment"); x.set_defaults(f=cmd_question_link)
+
+    s = sub.add_parser("source"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("add"); x.add_argument("project"); x.add_argument("--type", default="other", choices=["url", "doc", "note", "paper", "other"]); x.add_argument("--title", required=True); x.add_argument("--url"); x.add_argument("--path"); x.add_argument("--author"); x.add_argument("--excerpt"); x.set_defaults(f=cmd_source_add)
+    x = ss.add_parser("list"); x.add_argument("project"); x.set_defaults(f=cmd_source_list)
+    x = ss.add_parser("annotate"); x.add_argument("project"); x.add_argument("sid"); x.add_argument("note"); x.set_defaults(f=cmd_source_annotate)
+
+    s = sub.add_parser("note"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("add"); x.add_argument("project"); x.add_argument("title"); x.set_defaults(f=cmd_note_add)
+    x = ss.add_parser("list"); x.add_argument("project"); x.set_defaults(f=cmd_note_list)
+
+    s = sub.add_parser("finding"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("add"); x.add_argument("project"); x.add_argument("--statement", required=True); x.add_argument("--kind", default="observation", choices=["verified-source", "observation", "ai-hypothesis", "unverified"]); x.add_argument("--question"); x.add_argument("--confidence", default="low", choices=["low", "medium", "high"]); x.add_argument("--source", action="append"); x.add_argument("--evidence", action="append"); x.add_argument("--limitations"); x.set_defaults(f=cmd_finding_add)
+    x = ss.add_parser("list"); x.add_argument("project"); x.set_defaults(f=cmd_finding_list)
+    x = ss.add_parser("status"); x.add_argument("project"); x.add_argument("fid"); x.add_argument("status", choices=["candidate", "supported", "refuted", "inconclusive"]); x.set_defaults(f=cmd_finding_status)
+
+    s = sub.add_parser("decision"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("add"); x.add_argument("project"); x.add_argument("--decision", required=True); x.add_argument("--rationale"); x.add_argument("--alt", action="append"); x.set_defaults(f=cmd_decision_add)
+    x = ss.add_parser("list"); x.add_argument("project"); x.set_defaults(f=cmd_decision_list)
+    x = ss.add_parser("status"); x.add_argument("project"); x.add_argument("did"); x.add_argument("status", choices=["proposed", "accepted", "rejected", "superseded"]); x.set_defaults(f=cmd_decision_status)
+
+    s = sub.add_parser("blueprint"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("new"); x.add_argument("project"); x.add_argument("id"); x.add_argument("--title", default=""); x.set_defaults(f=cmd_bp_new)
+    x = ss.add_parser("list"); x.add_argument("project"); x.set_defaults(f=cmd_bp_list)
+    x = ss.add_parser("show"); x.add_argument("project"); x.add_argument("id"); x.set_defaults(f=cmd_bp_show)
+    x = ss.add_parser("set"); x.add_argument("project"); x.add_argument("id"); x.add_argument("--set", action="append", metavar="FIELD=VALUE"); x.add_argument("--add", action="append", metavar="FIELD=VALUE"); x.set_defaults(f=cmd_bp_set)
+    x = ss.add_parser("from-question"); x.add_argument("project"); x.add_argument("id"); x.add_argument("qid"); x.set_defaults(f=cmd_bp_from_question)
+    x = ss.add_parser("link"); x.add_argument("project"); x.add_argument("id"); x.add_argument("--finding", required=True); x.set_defaults(f=cmd_bp_link)
+    x = ss.add_parser("status"); x.add_argument("project"); x.add_argument("id"); x.add_argument("status", choices=["draft", "designing", "ready_for_generation", "generated", "testing", "improving", "validated", "released", "archived"]); x.set_defaults(f=cmd_bp_status)
+    x = ss.add_parser("validate"); x.add_argument("project"); x.add_argument("id"); x.set_defaults(f=cmd_bp_validate)
+    x = ss.add_parser("revisions"); x.add_argument("project"); x.add_argument("id"); x.set_defaults(f=cmd_bp_revisions)
+    x = ss.add_parser("diff"); x.add_argument("project"); x.add_argument("id"); x.add_argument("from_rev", type=int); x.add_argument("--to", dest="to_rev", type=int); x.set_defaults(f=cmd_bp_diff)
+    x = ss.add_parser("generate"); x.add_argument("project"); x.add_argument("id"); x.add_argument("--skill", required=True); x.add_argument("--variant", required=True); x.add_argument("--format", default="skill-md"); x.add_argument("--force", action="store_true"); x.set_defaults(f=cmd_bp_generate)
+
+    s = sub.add_parser("failure"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("analyze"); x.add_argument("run_id"); x.add_argument("--write", action="store_true"); x.set_defaults(f=cmd_failure_analyze)
+    x = ss.add_parser("list"); x.set_defaults(f=cmd_failure_list)
+    x = ss.add_parser("show"); x.add_argument("run_id"); x.set_defaults(f=cmd_failure_show)
+
+    s = sub.add_parser("release"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("new"); x.add_argument("skill"); x.add_argument("version"); x.add_argument("--variant", required=True); x.add_argument("--changelog", default=""); x.set_defaults(f=cmd_release_new)
+    x = ss.add_parser("list"); x.add_argument("skill", nargs="?"); x.set_defaults(f=cmd_release_list)
+    x = ss.add_parser("check"); x.add_argument("skill"); x.add_argument("version"); x.set_defaults(f=cmd_release_check)
+    x = ss.add_parser("status"); x.add_argument("skill"); x.add_argument("version"); x.add_argument("status", choices=["draft", "candidate", "validated", "released", "deprecated"]); x.set_defaults(f=cmd_release_status)
+    s = sub.add_parser("trace"); s.add_argument("ref"); s.set_defaults(f=cmd_trace)
+
+    s = sub.add_parser("ai"); ss = s.add_subparsers(dest="sub", required=True)
+    x = ss.add_parser("suggest"); x.add_argument("ref"); x.set_defaults(f=cmd_ai_suggest)
+    x = ss.add_parser("list"); x.set_defaults(f=cmd_ai_list)
+    x = ss.add_parser("show"); x.add_argument("id"); x.set_defaults(f=cmd_ai_show)
+    x = ss.add_parser("approve"); x.add_argument("id"); x.set_defaults(f=cmd_ai_approve)
+    x = ss.add_parser("reject"); x.add_argument("id"); x.set_defaults(f=cmd_ai_reject)
+    x = ss.add_parser("apply"); x.add_argument("id"); x.set_defaults(f=cmd_ai_apply)
     return p
 
 

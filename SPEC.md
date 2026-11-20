@@ -17,6 +17,8 @@
 | **Rollout / Run** | Một lần chạy agent (LLM + harness) trên một task với một arm. Experiment = nhiều rollouts × nhiều arms × nhiều tasks. |
 | **Insight** | Tri thức rút ra từ experiment, có link tới evidence, confidence level và điều kiện áp dụng. |
 | **Principle** | Insight được tái xác nhận qua nhiều experiment — nguyên lý thiết kế skill. |
+| **Research project** | Đơn vị tổ chức trên cùng của R&D: một mục tiêu nghiên cứu/vấn đề năng lực agent. Chứa questions, sources, notes, findings, decisions; vòng đời draft→…→completed→archived. |
+| **Finding** | Phát biểu nghiên cứu có phân loại nguồn (verified-source / observation / ai-hypothesis / unverified), confidence, limitations và status (candidate/supported/refuted/inconclusive). `supported` bắt buộc ≥1 evidence thật (source hoặc exp/run ref) — giống gate của insight promotion. |
 
 Nguyên tắc xuyên suốt: **một experiment chỉ thay đổi MỘT biến độc lập**
 (controlled comparison). Hệ thống enforce điều này ở mức schema và lint.
@@ -74,6 +76,31 @@ skill-lab/
 ---
 
 ## 2. Data model
+
+### 2.0 Research project
+
+```
+research/projects/<id>/
+  project.yaml      # id, title, objective, problem, status (lifecycle),
+                    # tags, scope, constraints, created, updated
+  charter.md        # tổng quan tự do: objective, problem, scope, hypotheses
+  questions/q*.yaml # question, objective, hypothesis, status
+                    # (open|investigating|answered|deferred),
+                    # findings[], experiments[] (link ids đã validate)
+  sources/s*.yaml   # type (url|doc|note|paper|other), title, author,
+                    # url|path, accessed, excerpt, annotations[]
+  findings/f*.yaml  # statement, kind, question, confidence
+                    # (low|medium|high), sources[], evidence[],
+                    # limitations, status, created
+  decisions/d*.yaml # decision, rationale, alternatives[], status
+                    # (proposed|accepted|rejected|superseded)
+  notes/*.md        # notebook entries — frontmatter {id, created, tags}
+```
+
+Validation: ref phải tồn tại thật (question/source trong project;
+experiment/run trong lab). `finding status → supported` bị gate: cần
+≥1 source/evidence và `kind != unverified`. `project delete` chỉ xoá
+draft rỗng — project có dữ liệu phải `archive` (append-only).
 
 ### 2.1 Skill
 

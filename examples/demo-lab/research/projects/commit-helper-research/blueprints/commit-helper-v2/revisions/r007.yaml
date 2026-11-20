@@ -1,0 +1,32 @@
+id: commit-helper-v2
+title: v2 redesign
+status: draft
+rev: 7
+fields:
+  name: commit-helper
+  description: Use when the user asks to write or improve a git commit message
+  research_motivation: 'Hypothesis: Front-loaded trigger verbs raise activation recall'
+  problem_statement: agents produce inconsistent commit messages
+  target_capability: conventional-commit drafting
+  target_users: []
+  use_cases: []
+  in_scope_tasks: []
+  out_of_scope_tasks: []
+  trigger_conditions: []
+  preconditions: []
+  required_context: []
+  execution_workflow: []
+  decision_rules: []
+  tool_requirements: []
+  resource_requirements: []
+  output_contract: single conventional-commit line + optional body
+  error_handling: []
+  safety_constraints: []
+  known_limitations: []
+  verification_strategy: ''
+  evaluation_criteria: []
+  compatible_environments: []
+related_findings: []
+generated_variants: []
+created: '2026-11-20'
+updated: '2026-11-20'

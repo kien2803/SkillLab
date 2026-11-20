@@ -1,0 +1,10 @@
+id: commit-helper-research
+title: Commit message generation
+objective: Can a skill reliably produce conventional-commit messages?
+problem: Agents write inconsistent commit messages
+status: draft
+tags: []
+scope: ''
+constraints: []
+created: '2026-11-20'
+updated: '2026-11-20'

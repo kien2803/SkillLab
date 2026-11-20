@@ -1,0 +1,23 @@
+run_id: reg-commit-helper-v1-v2-bad-01--candidate--write-commit-msg--r0
+experiment: reg-commit-helper-v1-v2-bad-01
+arm: candidate
+task: write-commit-msg
+skill_ref: commit-helper@v2-bad
+injection_mode: available
+verdict: failed
+first_failure: &id001
+  category: incorrect-activation
+  hypothesis: skill was offered but never activated on a task designed to trigger
+    it — weak trigger conditions or description
+  evidence: 'run.yaml: no ''activated'' skill_event on activation-positive task'
+causes:
+- *id001
+proposals:
+- category: incorrect-activation
+  problem: skill was offered but never activated on a task designed to trigger it
+    — weak trigger conditions or description
+  evidence: 'run.yaml: no ''activated'' skill_event on activation-positive task'
+  change: tighten `description` trigger wording — name the concrete situation ('use
+    when …') or narrow over-broad terms
+  expected_impact: higher activation precision on activation tasks
+  side_effects: too-narrow wording can reduce recall — re-run the activation suite

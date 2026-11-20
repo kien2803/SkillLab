@@ -1,0 +1,11 @@
+id: f01
+statement: 'diagnosing-bugs@v1 fails analysis: dead GLOSSARY.md link, 2165-token entry,
+  no progressive disclosure, no example'
+kind: observation
+question: q01
+confidence: high
+sources: []
+evidence: []
+limitations: ''
+status: candidate
+created: '2026-11-20'

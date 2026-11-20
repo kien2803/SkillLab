@@ -1,0 +1,18 @@
+id: reg-commit-helper-v1-v3-bp-01
+skill: commit-helper
+baseline: v1
+candidate: v3-bp
+suite: default
+tasks:
+- unrelated-refactor
+- write-commit-msg
+model: mock
+temperature: 0.0
+injection_mode: available
+harness: standard-tools-v1
+rollouts_per_arm: 2
+thresholds: {}
+experiment: reg-commit-helper-v1-v3-bp-01
+created: '2026-11-20T19:25:47+07:00'
+status: analyzed
+verdict: inconclusive

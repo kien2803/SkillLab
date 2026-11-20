@@ -71,6 +71,8 @@ class Lab:
     def regressions_dir(self) -> Path: return self.d("regressions")
     @property
     def suites_dir(self) -> Path: return self.d("suites")
+    @property
+    def research_dir(self) -> Path: return self.d("research") / "projects"
 
     # -- discovery ---------------------------------------------------------
 
@@ -101,6 +103,8 @@ class Lab:
         for d in DIRS:
             (root / d).mkdir(exist_ok=True)
             (root / d / ".gitkeep").touch()
+        (root / "research" / "projects").mkdir(parents=True,
+                                               exist_ok=True)
         return cls(root)
 
     # -- loaders -----------------------------------------------------------

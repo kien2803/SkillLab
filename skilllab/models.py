@@ -286,3 +286,152 @@ class EvalResult(BaseModel):
                 self.status = ("passed" if self.success else
                                ("failed" if states else "error"))
         return self
+
+
+# ---------- research projects ----------
+
+ProjectStatus = Literal["draft", "active", "researching", "designing",
+                        "developing", "experimenting", "validating",
+                        "completed", "archived"]
+
+
+class ProjectMeta(BaseModel):
+    id: str
+    title: str = ""
+    objective: str = ""
+    problem: str = ""
+    status: ProjectStatus = "draft"
+    tags: list[str] = Field(default_factory=list)
+    scope: str = ""
+    constraints: list[str] = Field(default_factory=list)
+    created: str = ""
+    updated: str = ""
+
+    @classmethod
+    def load(cls, project_dir: Path) -> "ProjectMeta":
+        return cls(**load_yaml(project_dir / "project.yaml"))
+
+    def save(self, project_dir: Path) -> None:
+        dump_yaml(self.model_dump(mode="json"),
+                  project_dir / "project.yaml")
+
+
+QuestionStatus = Literal["open", "investigating", "answered", "deferred"]
+
+
+class ResearchQuestion(BaseModel):
+    id: str
+    question: str = ""
+    objective: str = ""
+    hypothesis: str = ""
+    status: QuestionStatus = "open"
+    findings: list[str] = Field(default_factory=list)
+    experiments: list[str] = Field(default_factory=list)
+    created: str = ""
+
+
+SourceType = Literal["url", "doc", "note", "paper", "other"]
+
+
+class ResearchSource(BaseModel):
+    id: str
+    type: SourceType = "other"
+    title: str = ""
+    author: str = ""
+    url: str = ""
+    path: str = ""
+    accessed: str = ""
+    excerpt: str = ""
+    annotations: list[str] = Field(default_factory=list)
+
+
+FindingKind = Literal["verified-source", "observation", "ai-hypothesis",
+                      "unverified"]
+FindingStatus = Literal["candidate", "supported", "refuted",
+                        "inconclusive"]
+FindingConfidence = Literal["low", "medium", "high"]
+
+
+class ResearchFinding(BaseModel):
+    id: str
+    statement: str = ""
+    kind: FindingKind = "unverified"
+    question: str = ""                   # q-id this finding answers
+    confidence: FindingConfidence = "low"
+    sources: list[str] = Field(default_factory=list)   # s-ids
+    evidence: list[str] = Field(default_factory=list)  # exp/run ids
+    limitations: str = ""
+    status: FindingStatus = "candidate"
+    created: str = ""
+
+
+DecisionStatus = Literal["proposed", "accepted", "rejected",
+                         "superseded"]
+
+
+class ResearchDecision(BaseModel):
+    id: str
+    decision: str = ""
+    rationale: str = ""
+    alternatives: list[str] = Field(default_factory=list)
+    status: DecisionStatus = "proposed"
+    created: str = ""
+
+
+# ---------- skill blueprints ----------
+
+BlueprintStatus = Literal["draft", "designing", "ready_for_generation",
+                          "generated", "testing", "improving",
+                          "validated", "released", "archived"]
+
+
+class Blueprint(BaseModel):
+    """Structured spec bridging research findings and a skill draft.
+
+    `fields` holds the 23 spec sections (see blueprint.FIELDS); every
+    save bumps `rev` and snapshots the prior revision."""
+    id: str
+    title: str = ""
+    status: BlueprintStatus = "draft"
+    rev: int = 1
+    fields: dict = Field(default_factory=dict)
+    related_findings: list[str] = Field(default_factory=list)
+    generated_variants: list[str] = Field(default_factory=list)
+    created: str = ""
+    updated: str = ""
+
+
+# ---------- releases ----------
+
+ReleaseStatus = Literal["draft", "candidate", "validated", "released",
+                        "deprecated"]
+
+
+class Release(BaseModel):
+    skill: str
+    version: str
+    variant: str = ""
+    status: ReleaseStatus = "draft"
+    changelog: str = ""
+    created: str = ""
+    released_at: str = ""
+
+
+# ---------- architect proposals ----------
+
+ProposalStatus = Literal["pending", "approved", "rejected", "applied"]
+
+
+class Proposal(BaseModel):
+    """An assistant-suggested change: explicit patch + diff preview,
+    approval-gated before it touches a skill file."""
+    id: str
+    skill: str
+    variant: str = ""
+    finding: str = ""                  # the analyzer finding addressed
+    patch: dict = Field(default_factory=dict)   # {type, file, ...}
+    diff_preview: str = ""
+    status: ProposalStatus = "pending"
+    original_content: str = ""         # pre-apply snapshot for rollback
+    created: str = ""
+    applied_at: str = ""

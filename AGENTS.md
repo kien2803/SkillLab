@@ -19,6 +19,58 @@ python3 -m venv .venv
 
 ## Key concepts
 
+- Research projects (`research/projects/<id>/`) are the top-level R&D
+  container: `project.yaml` (lifecycle: draft→…→validating→completed→
+  archived), `charter.md`, and entity dirs `questions/ sources/
+  findings/ decisions/ notes/`. CLI: `lab project new|list|show|status|
+  archive|delete`, `lab question add|list|status|link`,
+  `lab source add|list|annotate`, `lab note add|list`,
+  `lab finding add|list|status`, `lab decision add|list|status`.
+  Finding `supported` is evidence-gated (≥1 project source or real
+  exp/run ref; `kind: unverified` can never be supported). `project
+  delete` only removes empty drafts — anything with research data must
+  be archived instead. Entities validate refs: sources/questions must
+  exist in-project, evidence must be a real experiment/run.
+  `lab ui` adds a Research page + per-project pages.
+- Skill blueprints (`research/projects/<pid>/blueprints/<bid>/`) bridge
+  research → SKILL.md: 23 spec fields (see `blueprint.FIELDS`; `*` =
+  required for generation), lifecycle draft→…→released, every edit bumps
+  `rev` with a snapshot in `revisions/rNNN.yaml`. `blueprint status`
+  beyond `designing` is gated on `blueprint validate` (required fields,
+  in/out-of-scope contradictions, contract/verification warnings).
+  `blueprint diff <p> <b> <r>` compares revisions; `from-question`
+  prefills from research; `link --finding` ties to evidence.
+- `lab blueprint generate <p> <b> --skill S --variant V [--format F]
+  [--force]` (`skilllab/studio.py`) emits a skill artifact from a
+  validated blueprint via `FORMATS` emitters (format abstraction —
+  new targets register there). Refuses on validation errors and on
+  existing variants (—force archives to `archive/skills/<s>/<v>-<ts>/`).
+  Provenance: variant note `blueprint <pid>/<bid>@r<rev>` + comment in
+  the file; blueprint records `generated_variants` and moves to
+  `generated`.
+- `lab failure analyze <run> [--write] | list | show <run>`
+  (`skilllab/failure.py`) classifies a run's first observable failure
+  deterministically — 11 spec categories + `infrastructure` /
+  `evaluation-error` (never blamed on the skill). Signals: run/eval
+  status, activation events vs task kind, failed checks by method,
+  resource_read gaps, token outliers vs same task+arm median. Verdicts:
+  clean | warning (soft signals) | failed | inconclusive. `--write`
+  persists `failures/<run>.yaml` with evidence-linked causes +
+  rule-based proposals (change / impact / side-effects).
+- `lab release new|list|check|status` (`skilllab/release.py`) —
+  `releases/<skill>/<version>.yaml`, lifecycle draft→…→released→
+  deprecated. `released` is gated on a computed checklist: static
+  analysis clean + ≥1 evaluated run on that variant + changelog
+  (blueprint link optional). Static analysis alone never ships.
+  `lab trace <skill@variant>` walks variant→blueprint→findings→
+  questions→project→experiments→runs→insights.
+- `lab ai suggest|list|show|approve|reject|apply`
+  (`skilllab/architect.py`) — proposal workflow: analyzer findings →
+  `proposals/prop-NNN.yaml` with explicit patch + unified-diff preview.
+  `apply` refuses non-approved proposals and snapshots the original
+  file inside the record for audit/rollback. Deterministic proposers
+  today (unlink dead refs, description-trigger, extract-resources);
+  LLM proposers plug into the same approval gate.
 - `model: mock` in lab.yaml = deterministic offline agent (no API key).
   Real rollouts need litellm + provider keys; set `model:` accordingly
   (e.g. `anthropic/claude-sonnet-4-5`, `gpt-4o`). `model: cmd:<shell>`

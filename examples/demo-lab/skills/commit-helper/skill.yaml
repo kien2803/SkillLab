@@ -9,3 +9,6 @@ variants:
 - id: v2-bad
   path: variants/v2-bad
   note: imported
+- id: v3-bp
+  path: variants/v3-bp
+  note: blueprint commit-helper-research/commit-helper-v2@r14

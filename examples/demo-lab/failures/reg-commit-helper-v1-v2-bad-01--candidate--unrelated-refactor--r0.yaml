@@ -1,0 +1,10 @@
+run_id: reg-commit-helper-v1-v2-bad-01--candidate--unrelated-refactor--r0
+experiment: reg-commit-helper-v1-v2-bad-01
+arm: candidate
+task: unrelated-refactor
+skill_ref: commit-helper@v2-bad
+injection_mode: available
+verdict: clean
+first_failure: null
+causes: []
+proposals: []

@@ -1,0 +1,10 @@
+id: pocock-skill-review
+title: mattpocock/skills import review
+objective: Evaluate imported engineering skills for registry readiness
+problem: Imported skills carry analyzer findings before they can be benchmarked
+status: experimenting
+tags: []
+scope: ''
+constraints: []
+created: '2026-11-20'
+updated: '2026-11-20'

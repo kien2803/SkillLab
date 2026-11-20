@@ -1,0 +1,12 @@
+id: f03
+statement: v2 restructure (phases→resources/, glossary reword, example block) clears
+  all 4 analyzer findings
+kind: observation
+question: q01
+confidence: high
+sources:
+- s01
+evidence: []
+limitations: ''
+status: supported
+created: '2026-11-20'

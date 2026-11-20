@@ -1,0 +1,41 @@
+run_id: reg-commit-helper-v1-v3-bp-01--candidate--write-commit-msg--r1
+experiment: reg-commit-helper-v1-v3-bp-01
+arm: candidate
+task: write-commit-msg
+model:
+  name: mock
+  temperature: 0.0
+seed: 170376259
+injection_mode: available
+skill_ref: commit-helper@v3-bp
+skill_hash: sha256:845032b6ed8360d1
+status: ok
+error: null
+started: '2026-11-20T12:25:47.265411+00:00'
+finished: '2026-11-20T12:25:47.267127+00:00'
+usage:
+  input_tokens: 368
+  output_tokens: 9
+  turns: 3
+skill_events:
+- t: 0
+  event: offered
+  skill: commit-helper
+  path: null
+- t: 0
+  event: offered
+  skill: code-review
+  path: null
+- t: 0
+  event: offered
+  skill: diagnosing-bugs
+  path: null
+- t: 0
+  event: offered
+  skill: grill-with-docs
+  path: null
+- t: 1
+  event: activated
+  skill: code-review
+  path: null
+final_message: Done — wrote OUTPUT.md with the result.

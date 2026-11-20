@@ -1,0 +1,11 @@
+id: f01
+statement: Removing imperative verbs from description drops activation recall to 0
+kind: observation
+question: q01
+confidence: high
+sources: []
+evidence:
+- reg-commit-helper-v1-v2-bad-01
+limitations: ''
+status: supported
+created: '2026-11-20'

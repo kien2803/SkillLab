@@ -1,0 +1,11 @@
+id: diagnosing-bugs
+kind: skill-md
+status: draft
+tags: []
+variants:
+- id: v1
+  path: variants/v1
+  note: imported
+- id: v2
+  path: variants/v2
+  note: progressive-disclosure + dead-link + example fixes

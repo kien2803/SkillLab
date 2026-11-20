@@ -1,0 +1,6 @@
+id: d01
+decision: Keep v1 wording; reject v2-bad
+rationale: regression run showed activation collapse
+alternatives: []
+status: proposed
+created: '2026-11-20'

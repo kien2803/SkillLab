@@ -19,6 +19,8 @@ from .models import (EvalResult, RunRecord, load_yaml, parse_frontmatter,
                      parse_skill_ref)
 from .registry import skill_description
 from .report import load_runs
+from . import research
+from . import blueprint
 
 _CSS = """
 :root{--bg:#eef0f3;--panel:#ffffff;--panel2:#f4f6f8;--border:#dde1e7;
@@ -193,7 +195,8 @@ def _empty(msg: str) -> str:
 
 def _nav(active: str, depth: int = 0) -> str:
     pre = "../" * depth
-    items = [("index", "Overview"), ("skills", "Skills"),
+    items = [("index", "Overview"), ("research", "Research"),
+             ("skills", "Skills"),
              ("benchmarks", "Benchmarks"), ("regressions", "Regressions"),
              ("experiments", "Experiments"), ("insights", "Knowledge")]
     links = "".join(
@@ -330,6 +333,7 @@ def _overview(lab: Lab, runs, regs) -> str:
     n_fail = sum(1 for r, _ in runs if r.status == "error")
     n_reg_alert = sum(1 for r in regs if r.get("verdict") == "regressed")
     cards = [
+        _stat("projects", len(research.list_projects(lab))),
         _stat("skills", len(lab.skills())),
         _stat("experiments", sum(1 for d in lab.experiments_dir.iterdir()
                                  if (d / "experiment.yaml").is_file())
@@ -792,6 +796,22 @@ def _run_page(lab: Lab, rec: RunRecord, ev: EvalResult | None,
         body.append('<div class="note err">no eval.yaml — evaluation '
                     "missing or pending</div>")
 
+    # failure analysis report, if one was written for this run
+    frep = lab.d("failures") / f"{rec.run_id}.yaml"
+    if frep.is_file():
+        r = load_yaml(frep)
+        vcls = {"failed": "bad", "warning": "warn",
+                "inconclusive": "muted"}.get(r["verdict"], "ok")
+        rows = [[_esc(c["category"]), _esc(c["hypothesis"][:110]),
+                 f'<span class="muted">{_esc(c["evidence"][:80])}</span>']
+                for c in r["causes"]]
+        body.append(f"<h2>Failure analysis "
+                    f"{_badge(r['verdict'], vcls)}</h2>"
+                    + (_table(["category", "hypothesis", "evidence"],
+                              rows, sortable=False)
+                       if rows else
+                       '<p class="muted">no failures detected</p>'))
+
     # skill events
     if rec.skill_events:
         rows = [[str(e.t), _esc(e.event), _esc(e.skill or "—"),
@@ -855,6 +875,182 @@ def _insights(lab: Lab) -> str:
 # -------------------------------------------------------------------- main --
 
 
+# --------------------------------------------------------- page: research
+
+
+_PROJ_BADGE = {
+    "draft": "muted", "archived": "muted", "completed": "ok",
+    "validating": "warn", "experimenting": "warn",
+}
+
+
+def _proj_status(m) -> str:
+    return _badge(m.status, _PROJ_BADGE.get(m.status, "info"))
+
+
+def _research(lab: Lab) -> str:
+    projects = research.list_projects(lab)
+    if not projects:
+        return _empty("No research projects yet — create one with "
+                      "`lab project new <id>`.")
+    rows = []
+    for m in projects:
+        s = research.project_summary(lab, m.id)
+        rows.append([
+            f'<a href="project-{_esc(m.id)}.html">{_esc(m.id)}</a>',
+            _esc(m.title),
+            _proj_status(m),
+            f'<span class="num-cell">{len(s["questions"])}</span>',
+            f'<span class="num-cell">{len(s["findings"])}</span>',
+            f'<span class="num-cell">{len(s["sources"])}</span>',
+            f'<span class="num-cell">{len(s["decisions"])}</span>',
+            _esc(m.updated or m.created)])
+    return _filter("prj-t", "filter projects…") + _table(
+        ["project", "title", "status", "questions", "findings",
+         "sources", "decisions", "updated"], rows, table_id="prj-t")
+
+
+_FINDING_STATUS_BADGE = {"candidate": "warn", "supported": "ok",
+                         "refuted": "bad", "inconclusive": "muted"}
+_FINDING_KIND_BADGE = {"verified-source": "ok", "observation": "info",
+                      "ai-hypothesis": "purple", "unverified": "muted"}
+
+
+def _project_page(lab: Lab, m) -> str:
+    s = research.project_summary(lab, m.id)
+    d = research.project_dir(lab, m.id)
+    nf, nq = len(s["findings"]), len(s["questions"])
+    out = [f"<p>{_proj_status(m)} {_badge(str(nf) + ' findings', 'muted')}"
+           f" {_badge(str(nq) + ' questions', 'muted')}</p>"]
+    if m.objective:
+        out.append(f'<div class="note info"><b>Objective</b> — '
+                   f"{_esc(m.objective)}</div>")
+    if m.problem:
+        out.append(f'<div class="note"><b>Problem</b> — '
+                   f"{_esc(m.problem)}</div>")
+    charter = d / "charter.md"
+    if charter.is_file():
+        fm, body = parse_frontmatter(charter.read_text())
+        out.append(f"<details><summary>charter.md</summary>"
+                   f'<pre class="raw">{_esc(body.strip())}</pre></details>')
+
+    qs = s["questions"]
+    out.append("<h2>Research questions</h2>" + (
+        _table(["id", "question", "status", "hypothesis", "findings",
+                "experiments"],
+               [[_esc(q.id), _esc(q.question), _sbadge(q.status),
+                 _esc(q.hypothesis), _esc(", ".join(q.findings)),
+                 _esc(", ".join(q.experiments))] for q in qs])
+        if qs else _empty("none — `lab question add`")))
+
+    fs = s["findings"]
+    out.append("<h2>Findings</h2>" + (
+        _table(["id", "statement", "kind", "confidence", "status",
+                "question", "evidence"],
+               [[_esc(f.id), _esc(f.statement),
+                 _badge(f.kind, _FINDING_KIND_BADGE.get(f.kind, "muted")),
+                 _esc(f.confidence),
+                 _badge(f.status,
+                        _FINDING_STATUS_BADGE.get(f.status, "muted")),
+                 _esc(f.question),
+                 _esc(", ".join(f.sources + f.evidence))]
+                for f in fs])
+        if fs else _empty("none — `lab finding add`")))
+
+    ss = s["sources"]
+    out.append("<h2>Sources</h2>" + (
+        _table(["id", "type", "title", "author", "ref", "accessed"],
+               [[_esc(x.id), _esc(x.type), _esc(x.title), _esc(x.author),
+                 _esc(x.url or x.path), _esc(x.accessed)] for x in ss])
+        if ss else _empty("none — `lab source add`")))
+
+    ds = s["decisions"]
+    out.append("<h2>Decisions</h2>" + (
+        _table(["id", "decision", "status", "rationale", "created"],
+               [[_esc(x.id), _esc(x.decision), _sbadge(x.status),
+                 _esc(x.rationale), _esc(x.created)] for x in ds])
+        if ds else _empty("none — `lab decision add`")))
+
+    ns = s["notes"]
+    out.append("<h2>Notes</h2>" + (
+        _table(["note", "created"],
+               [[_esc(n["id"]), _esc(n["created"])] for n in ns])
+        if ns else _empty("none — `lab note add`")))
+
+    bps = blueprint.list_blueprints(lab, m.id)
+    out.append("<h2>Blueprints</h2>" + (
+        _table(["blueprint", "title", "status", "rev", "issues",
+                "findings", "updated"],
+               [[f'<a href="blueprint-{_esc(m.id)}-{_esc(b.id)}.html">'
+                 f'{_esc(b.id)}</a>',
+                 _esc(b.title),
+                 _badge(b.status, _BP_BADGE.get(b.status, "info")),
+                 f"r{b.rev}",
+                 _bp_issue_cell(lab, m.id, b.id),
+                 _esc(", ".join(b.related_findings)),
+                 _esc(b.updated)] for b in bps])
+        if bps else _empty("none — `lab blueprint new`")))
+    return "".join(out)
+
+
+_BP_BADGE = {"draft": "muted", "designing": "muted", "archived": "muted",
+             "ready_for_generation": "info", "generated": "info",
+             "testing": "warn", "improving": "warn",
+             "validated": "ok", "released": "ok"}
+
+
+def _bp_issue_cell(lab: Lab, pid: str, bid: str) -> str:
+    issues = blueprint.validate(lab, pid, bid)
+    errs = sum(1 for i in issues if i["severity"] == "error")
+    warns = len(issues) - errs
+    if not issues:
+        return _badge("clean", "ok")
+    parts = []
+    if errs:
+        parts.append(_badge(f"{errs} errors", "bad"))
+    if warns:
+        parts.append(_badge(f"{warns} warnings", "warn"))
+    return " ".join(parts)
+
+
+def _blueprint_page(lab: Lab, pid: str, bid: str) -> str:
+    b = blueprint.get_blueprint(lab, pid, bid)
+    out = [f"<p>{_badge(b.status, _BP_BADGE.get(b.status, 'info'))} "
+           f"{_badge(f'rev r{b.rev}', 'muted')} "
+           f'{_badge(f"project {pid}", "muted")}</p>']
+    issues = blueprint.validate(lab, pid, bid)
+    if issues:
+        rows = [[_badge(i["severity"],
+                       "bad" if i["severity"] == "error" else "warn"),
+                 _esc(i["check"]), _esc(i["field"]), _esc(i["message"])]
+                for i in issues]
+        out.append("<h2>Validation</h2>" + _table(
+            ["severity", "check", "field", "message"], rows))
+    rows = []
+    for key, kind, req, label in blueprint.FIELDS:
+        v = b.fields.get(key)
+        if isinstance(v, list):
+            disp = "<br>".join(_esc(x) for x in v) or "—"
+        else:
+            disp = _esc(v) if v else "—"
+        rows.append([f"<code>{_esc(key)}{'*' if req else ''}</code>",
+                     _esc(label), disp])
+    out.append("<h2>Spec fields <span class='muted'>"
+               "(* required for generation)</span></h2>"
+               + _table(["field", "meaning", "value"], rows,
+                        sortable=False))
+    if b.related_findings:
+        out.append(f"<p class='muted'>related findings: "
+                   f"{_esc(', '.join(b.related_findings))}</p>")
+    revs = blueprint.revisions(lab, pid, bid)
+    if len(revs) > 1:
+        out.append("<h2>Revisions</h2>" + _table(
+            ["rev", "status", "updated"],
+            [[f"r{x.rev}", _esc(x.status), _esc(x.updated)]
+             for x in revs]))
+    return "".join(out)
+
+
 def generate(lab: Lab) -> Path:
     out = lab.d("ui")
     out.mkdir(exist_ok=True)
@@ -862,6 +1058,17 @@ def generate(lab: Lab) -> Path:
 
     from .regression import list_regressions
     regs = list_regressions(lab)
+
+    (out / "research.html").write_text(
+        _page(lab, "Research Projects", _research(lab), "research"))
+    for m in research.list_projects(lab):
+        (out / f"project-{m.id}.html").write_text(
+            _page(lab, f"project: {m.id}", _project_page(lab, m),
+                  "research"))
+        for b in blueprint.list_blueprints(lab, m.id):
+            (out / f"blueprint-{m.id}-{b.id}.html").write_text(
+                _page(lab, f"blueprint: {b.id}",
+                      _blueprint_page(lab, m.id, b.id), "research"))
 
     (out / "index.html").write_text(
         _page(lab, f"SkillLab — {lab.root.name}",
@@ -911,6 +1118,18 @@ def generate(lab: Lab) -> Path:
         body += "<h2>Findings</h2>" + (
             _table(["variant", "severity", "check", "message"], frows)
             if frows else "<p>no findings</p>")
+        # releases for this skill
+        from .release import list_releases
+        rels = list_releases(lab, m.id)
+        if rels:
+            rcls = {"released": "ok", "validated": "info",
+                    "deprecated": "muted"}
+            body += "<h2>Releases</h2>" + _table(
+                ["version", "variant", "status", "released", "changelog"],
+                [[_esc(r.version), _esc(r.variant or "—"),
+                  _badge(r.status, rcls.get(r.status, "warn")),
+                  _esc((r.released_at or "")[:16]),
+                  _esc(r.changelog[:80])] for r in rels])
         srows = [[f'<a href="run-{_esc(r.run_id)}.html">{_esc(r.run_id)}</a>',
                   _esc(r.skill_ref or ""), _esc(r.experiment), _esc(r.task),
                   _sbadge(r.status), _sbadge(e.status if e else None),

@@ -1,0 +1,11 @@
+id: f02
+statement: code-review@v1 references repo-local CODING_STANDARDS.md/CONTRIBUTING.md
+  — dead links after import
+kind: observation
+question: q01
+confidence: high
+sources: []
+evidence: []
+limitations: ''
+status: candidate
+created: '2026-11-20'

@@ -1,0 +1,7 @@
+id: d01
+decision: Adopt diagnosing-bugs v2 as canonical; keep v1 as imported baseline
+rationale: v2 passes static analysis clean; v1 retains findings for regression comparison
+alternatives:
+- patch v1 in place
+status: proposed
+created: '2026-11-20'

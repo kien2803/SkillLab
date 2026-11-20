@@ -1,0 +1,349 @@
+<!doctype html><html lang=en><meta charset=utf-8><meta name="viewport" content="width=device-width, initial-scale=1"><title>skill: diagnosing-bugs — SkillLab</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400..700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"><style>
+:root{--bg:#eef0f3;--panel:#ffffff;--panel2:#f4f6f8;--border:#dde1e7;
+--text:#0b0c0e;--muted:#5d6470;--accent:#1f2de6;--ok:#1d7a46;--bad:#9a2828;
+--warn:#6d4e0c;--info:#1f2de6;--purple:#6d4fc2;
+--font:"Familjen Grotesk",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+--mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{font-family:var(--font);margin:0;background:var(--bg);color:var(--text);
+font-size:14px;line-height:1.5}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.topbar{display:flex;align-items:center;gap:1.2rem;padding:.7rem 1.4rem;
+background:var(--panel);border-bottom:1px solid var(--border);
+position:sticky;top:0;z-index:10}
+.topbar .brand{display:inline-flex;align-items:center;gap:.5rem;
+font-weight:600;color:var(--text);font-size:1.05rem;letter-spacing:-.01em}
+.topbar .brand::before{content:"S";display:inline-flex;align-items:center;
+justify-content:center;width:22px;height:22px;border-radius:5px;
+background:var(--accent);color:#fff;font:600 13px/1 var(--mono)}
+.topbar nav{display:flex;gap:.2rem;flex-wrap:wrap}
+.topbar nav a{color:var(--muted);padding:.3rem .7rem;border-radius:5px;
+font-size:.88rem}
+.topbar nav a:hover{background:var(--panel2);color:var(--text);text-decoration:none}
+.topbar nav a.active{background:rgb(31 45 230/.08);color:var(--accent);font-weight:600}
+.wrap{max-width:1280px;margin:0 auto;padding:1.4rem}
+h1{font-size:1.5rem;margin:.2rem 0 1rem;letter-spacing:-.02em}
+h2{font-size:1.15rem;margin:1.8rem 0 .6rem;color:var(--text);
+letter-spacing:-.02em}
+h3{font:500 .78rem/1.4 var(--mono);margin:1.2rem 0 .4rem;color:var(--muted);
+text-transform:uppercase;letter-spacing:.06em}
+.grid{display:grid;gap:.9rem}
+.cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:6px;
+padding:.9rem 1rem;box-shadow:0 1px 2px rgb(11 12 14/.04)}
+.card .num{font-size:1.7rem;font-weight:600;line-height:1.1;
+letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.card .lbl{color:var(--muted);font:500 .72rem/1.3 var(--mono);
+text-transform:uppercase;letter-spacing:.06em}
+.card .sub{color:var(--muted);font-size:.78rem;margin-top:.15rem}
+.card.bad .num{color:var(--bad)}.card.ok .num{color:var(--ok)}
+.card.warn .num{color:var(--warn)}
+table{border-collapse:collapse;width:100%;margin:.6rem 0;font-size:.86rem}
+th,td{padding:.5rem .7rem;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--muted);font:500 .72rem/1.3 var(--mono);text-transform:uppercase;
+letter-spacing:.06em;background:var(--panel);position:sticky;top:48px}
+table.sortable th{cursor:pointer;user-select:none}
+table.sortable th:hover{color:var(--text)}
+table.sortable th.sorted-asc::after{content:" ▲";font-size:.6rem}
+table.sortable th.sorted-desc::after{content:" ▼";font-size:.6rem}
+tr:hover td{background:var(--panel2)}
+.num-cell{font-variant-numeric:tabular-nums;text-align:right}
+.badge{display:inline-block;padding:.15rem .6rem;border-radius:99px;
+font:500 .74rem/1.3 var(--mono);letter-spacing:.01em}
+.b-ok{background:rgb(29 122 70/.10);color:var(--ok)}
+.b-bad{background:rgb(154 40 40/.10);color:var(--bad)}
+.b-warn{background:rgb(109 78 12/.12);color:var(--warn)}
+.b-info{background:rgb(31 45 230/.09);color:var(--info)}
+.b-purple{background:rgb(109 79 194/.10);color:var(--purple)}
+.b-muted{background:var(--bg);color:var(--muted)}
+.muted{color:var(--muted)}
+.empty{border:1px dashed var(--border);border-radius:6px;padding:1.6rem;
+text-align:center;color:var(--muted);margin:.8rem 0}
+.note{border-left:3px solid var(--warn);background:rgb(109 78 12/.06);
+padding:.6rem .9rem;border-radius:0 6px 6px 0;margin:.8rem 0;font-size:.85rem}
+.note.info{border-color:var(--info);background:rgb(31 45 230/.06)}
+.note.err{border-color:var(--bad);background:rgb(154 40 40/.06)}
+.bar-row{display:flex;align-items:center;gap:.6rem;margin:.28rem 0}
+.bar-row .bar-lbl{width:180px;font-size:.82rem;overflow:hidden;
+text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
+.bar-track{flex:1;background:#e2e5ea;border-radius:4px;height:16px;
+overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;background:var(--accent);
+min-width:2px}
+.bar-fill.ok{background:var(--ok)}.bar-fill.bad{background:var(--bad)}
+.bar-fill.warn{background:var(--warn)}.bar-fill.purple{background:var(--purple)}
+.bar-val{width:64px;text-align:right;font-size:.8rem;
+font-variant-numeric:tabular-nums;flex-shrink:0}
+.msg{border:1px solid var(--border);border-radius:6px;margin:.4rem 0;
+padding:.5rem .8rem;background:var(--panel)}
+.msg pre{margin:.3rem 0 0;white-space:pre-wrap;word-break:break-word;
+font:400 .78rem/1.5 var(--mono);color:var(--muted)}
+.role-system{border-left:3px solid var(--purple)}
+.role-user{border-left:3px solid var(--info)}
+.role-assistant{border-left:3px solid var(--ok)}
+.role-tool{border-left:3px solid var(--border);background:var(--panel2)}
+.role-badge{font:500 .7rem/1.3 var(--mono);text-transform:uppercase;
+letter-spacing:.06em;color:var(--muted)}
+.filter{width:100%;max-width:340px;background:var(--panel);
+border:1px solid var(--border);border-radius:6px;color:var(--text);
+padding:.45rem .7rem;font-size:.85rem;margin:.3rem 0}
+.filter:focus{outline:2px solid rgb(31 45 230/.4);outline-offset:1px;
+border-color:var(--accent)}
+.section{background:var(--panel);border:1px solid var(--border);
+border-radius:6px;padding:1rem 1.2rem;margin:.9rem 0;
+box-shadow:0 1px 2px rgb(11 12 14/.04)}
+details{margin:.4rem 0}
+summary{cursor:pointer;color:var(--accent);font-size:.85rem}
+pre.raw{background:var(--panel2);border:1px solid var(--border);
+border-radius:6px;padding:.8rem;overflow-x:auto;
+font:400 .78rem/1.55 var(--mono);
+color:var(--muted);max-height:420px;overflow-y:auto}
+code{font-family:var(--mono);font-size:.9em}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:.9rem}
+@media(max-width:900px){.two-col{grid-template-columns:1fr}
+.bar-row .bar-lbl{width:110px}}
+@media(max-width:640px){.topbar{flex-wrap:wrap}.wrap{padding:.8rem}
+th,td{padding:.4rem}}
+</style><div class="topbar"><span class="brand">SkillLab</span><nav><a href="index.html" class="">Overview</a><a href="research.html" class="">Research</a><a href="skills.html" class="active">Skills</a><a href="benchmarks.html" class="">Benchmarks</a><a href="regressions.html" class="">Regressions</a><a href="experiments.html" class="">Experiments</a><a href="insights.html" class="">Knowledge</a></nav></div><div class="wrap"><h1>skill: diagnosing-bugs</h1><p><span class="badge b-muted">skill-md</span> <span class="badge b-muted">draft</span> <span class="badge b-info">2 variants</span></p><h2>Findings</h2><table class="sortable"><thead><tr><th>variant</th><th>severity</th><th>check</th><th>message</th></tr></thead><tbody><tr data-frow><td>v1</td><td><span class="badge b-warn">warn</span></td><td>token-budget</td><td>entry file ~2165 tokens (&gt;2000)</td></tr><tr data-frow><td>v1</td><td><span class="badge b-warn">warn</span></td><td>progressive-disclosure</td><td>heavy content embedded in entry file — move detail into resources/ and link to it</td></tr><tr data-frow><td>v1</td><td><span class="badge b-bad">error</span></td><td>dead-links</td><td>reference to missing file &#x27;GLOSSARY.md&#x27;</td></tr><tr data-frow><td>v1</td><td><span class="badge b-muted">info</span></td><td>anti-patterns</td><td>no code block / concrete example in entry file — examples anchor agent behavior better than prose</td></tr></tbody></table><h2>Runs by variant</h2><div class="empty">no runs recorded against this skill</div><details><summary>variant v1 — SKILL.md</summary><pre class="raw">---
+name: diagnosing-bugs
+description: Diagnosis loop for hard bugs and performance regressions. Use when the user says &quot;diagnose&quot;/&quot;debug this&quot;, or reports something broken/throwing/failing/slow.
+---
+
+# Diagnosing Bugs
+
+A discipline for hard bugs. Skip phases only when explicitly justified.
+
+When exploring the codebase, read `GLOSSARY.md` (if it exists) to get a clear mental model of the relevant modules, and check ADRs in the area you&#x27;re touching.
+
+## Redact
+
+This skill has you show commands, outputs and captured artifacts. **Redact every secret first**: write `&lt;REDACTED&gt;` in its place. Build loops against env vars, so the credential stays in the environment rather than in what you show. Captured artifacts carry auth headers: quote only the lines that carry the signal.
+
+If the redacted output is not enough to diagnose the bug, say so and ask the user.
+
+## Phase 1: Build a feedback loop
+
+**This is the skill.** Everything else is mechanical. If you have a **tight** pass/fail signal for the bug (one that goes red on _this_ bug), you will find the cause; bisection, hypothesis-testing, and instrumentation all just consume it. If you don&#x27;t have one, no amount of staring at code will save you.
+
+Spend disproportionate effort here. **Be aggressive. Be creative. Refuse to give up.**
+
+### Ways to construct one, in roughly this order
+
+1. **Failing test** at whatever seam reaches the bug: unit, integration, e2e.
+2. **Curl / HTTP script** against a running dev server.
+3. **CLI invocation** with a fixture input, diffing stdout against a known-good snapshot.
+4. **Headless browser script** (Playwright / Puppeteer) that drives the UI and asserts on DOM/console/network.
+5. **Replay a captured trace.** Save a real network request / payload / event log to disk; replay it through the code path in isolation.
+6. **Throwaway harness.** Spin up a minimal subset of the system (one service, mocked deps) that exercises the bug code path with a single function call.
+7. **Property / fuzz loop.** If the bug is &quot;sometimes wrong output&quot;, run 1000 random inputs and look for the failure mode.
+8. **Bisection harness.** If the bug appeared between two known states (commit, dataset, version), automate &quot;boot at state X, check, repeat&quot; so you can `git bisect run` it.
+9. **Differential loop.** Run the same input through old-version vs new-version (or two configs) and diff outputs.
+10. **HITL bash script.** Last resort. If a human must click, drive _them_ with `scripts/hitl-loop.template.sh` so the loop is still structured. Captured output feeds back to you.
+
+Build the right feedback loop, and the bug is 90% fixed.
+
+### Tighten the loop
+
+Treat the loop as a product. Once you have _a_ loop, **tighten** it:
+
+- Can I make it faster? (Cache setup, skip unrelated init, narrow the test scope.)
+- Can I make the signal sharper? (Assert on the specific symptom, not &quot;didn&#x27;t crash&quot;.)
+- Can I make it more deterministic? (Pin time, seed RNG, isolate filesystem, freeze network.)
+
+A 30-second flaky loop is barely better than no loop; a 2-second deterministic one is tight, a debugging superpower.
+
+### Non-deterministic bugs
+
+The goal is not a clean repro but a **higher reproduction rate**. Loop the trigger 100×, parallelise, add stress, narrow timing windows, inject sleeps. A 50%-flake bug is debuggable; 1% is not, so keep raising the rate until it&#x27;s debuggable.
+
+### When you genuinely cannot build a loop
+
+Stop and say so explicitly. List what you tried. Ask the user for: (a) access to whatever environment reproduces it, (b) a redacted captured artifact (HAR file, log dump, core dump, screen recording with timestamps), or (c) permission to add temporary production instrumentation. Do **not** proceed to hypothesise without a loop.
+
+### Completion criterion: a tight loop that goes red
+
+Phase 1 is done when the loop is **tight** and **red-capable**: you can name **one command** (a script path, a test invocation, a curl) that you have **already run at least once** (show the invocation and its output, redacted), and that is:
+
+- [ ] **Red-capable**: it drives the actual bug code path and asserts the **user&#x27;s exact symptom**, so it can go red on this bug and green once fixed. Not &quot;runs without erroring&quot;; it must be able to _catch this specific bug_.
+- [ ] **Deterministic**: same verdict every run (flaky bugs: a pinned, high reproduction rate, per above).
+- [ ] **Fast**: seconds, not minutes.
+- [ ] **Agent-runnable**: you can run it unattended; a human in the loop only via `scripts/hitl-loop.template.sh`.
+
+If you catch yourself reading code to build a theory before this command exists, **stop: jumping straight to a hypothesis is the exact failure this skill prevents.** No red-capable command, no Phase 2.
+
+## Phase 2: Reproduce + minimise
+
+Run the loop. Watch it go red as the bug appears.
+
+Confirm:
+
+- [ ] The loop produces the failure mode the **user** described, not a different failure that happens to be nearby. Wrong bug = wrong fix.
+- [ ] The failure is reproducible across multiple runs (or, for non-deterministic bugs, reproducible at a high enough rate to debug against).
+- [ ] You have captured the exact symptom (error message, wrong output, slow timing) so later phases can verify the fix actually addresses it.
+
+### Minimise
+
+Once it&#x27;s red, shrink the repro to the **smallest scenario that still goes red**. Cut inputs, callers, config, data, and steps **one at a time**, re-running the loop after each cut, and keep only what&#x27;s load-bearing for the failure.
+
+Why bother: a minimal repro shrinks the hypothesis space in Phase 3 (fewer moving parts left to suspect) and becomes the clean regression test in Phase 5.
+
+Done when **every remaining element is load-bearing**: removing any one of them makes the loop go green.
+
+Do not proceed until you have reproduced **and** minimised.
+
+## Phase 3: Hypothesise
+
+Generate **3–5 ranked hypotheses** before testing any of them. Single-hypothesis generation anchors on the first plausible idea.
+
+Each hypothesis must be **falsifiable**: state the prediction it makes.
+
+&gt; Format: &quot;If &lt;X&gt; is the cause, then &lt;changing Y&gt; will make the bug disappear / &lt;changing Z&gt; will make it worse.&quot;
+
+If you cannot state the prediction, the hypothesis is a vibe: discard or sharpen it.
+
+**Show the ranked list to the user before testing.** They often have domain knowledge that re-ranks instantly (&quot;we just deployed a change to #3&quot;), or know hypotheses they&#x27;ve already ruled out. Cheap checkpoint, big time saver. Don&#x27;t block on it; proceed with your ranking if the user is AFK.
+
+## Phase 4: Instrument
+
+Each probe must map to a specific prediction from Phase 3. **Change one variable at a time.**
+
+Tool preference:
+
+1. **Debugger / REPL inspection** if the env supports it. One breakpoint beats ten logs.
+2. **Targeted logs** at the boundaries that distinguish hypotheses.
+3. Never &quot;log everything and grep&quot;.
+
+**Tag every debug log** with a unique prefix, e.g. `[DEBUG-a4f2]`. Cleanup at the end becomes a single grep. Untagged logs survive; tagged logs die.
+
+**Perf branch.** For performance regressions, logs are usually wrong. Instead: establish a baseline measurement (timing harness, `performance.now()`, profiler, query plan), then bisect. Measure first, fix second.
+
+## Phase 5: Fix + regression test
+
+Write the regression test **before the fix**, but only if there is a **correct seam** for it.
+
+A correct seam is one where the test exercises the **real bug pattern** as it occurs at the call site. If the only available seam is too shallow (single-caller test when the bug needs multiple callers, unit test that can&#x27;t replicate the chain that triggered the bug), a regression test there gives false confidence.
+
+**If no correct seam exists, that itself is the finding.** Note it. The codebase architecture is preventing the bug from being locked down. Flag this for the next phase.
+
+If a correct seam exists:
+
+1. Turn the minimised repro into a failing test at that seam.
+2. Watch it fail. If you forced the red by mutating code or a fixture, `diff` against a pristine copy to prove the mutation landed before you trust it.
+3. Apply the fix.
+4. Watch it pass.
+5. Re-run the Phase 1 feedback loop against the original (un-minimised) scenario.
+
+## Phase 6: Cleanup
+
+Required before declaring done:
+
+- [ ] Original repro no longer reproduces (re-run the Phase 1 loop)
+- [ ] Regression test passes (or absence of seam is documented)
+- [ ] All `[DEBUG-...]` instrumentation removed (`grep` the prefix)
+- [ ] Throwaway prototypes deleted (or moved to a clearly-marked debug location)
+- [ ] The hypothesis that turned out correct is stated in the commit / PR message, so the next debugger learns
+</pre></details><details><summary>variant v2 — SKILL.md</summary><pre class="raw">---
+name: diagnosing-bugs
+description: Diagnosis loop for hard bugs and performance regressions. Use when the user says &quot;diagnose&quot;/&quot;debug this&quot;, or reports something broken/throwing/failing/slow.
+---
+
+# Diagnosing Bugs
+
+A discipline for hard bugs. Skip phases only when explicitly justified.
+
+If the repo carries a glossary or module index, read it first to build a
+mental model of the modules you&#x27;re touching, and check ADRs in the area.
+
+## Redact
+
+This skill has you show commands, outputs and captured artifacts. **Redact
+every secret first**: write `&lt;REDACTED&gt;` in its place. Build loops against
+env vars, so the credential stays in the environment rather than in what
+you show. Captured artifacts carry auth headers: quote only the lines that
+carry the signal.
+
+If the redacted output is not enough to diagnose the bug, say so and ask
+the user.
+
+## Phase 1: Build a feedback loop
+
+**This is the skill.** Everything else is mechanical. If you have a
+**tight** pass/fail signal for the bug — one that goes red on _this_ bug —
+you will find the cause. Bisection, hypothesis-testing and instrumentation
+all just consume it. Without one, no amount of staring at code will save
+you.
+
+Spend disproportionate effort here. **Be aggressive. Be creative. Refuse
+to give up.**
+
+Concrete example — a failing test at the seam reaching the bug:
+
+```bash
+pytest tests/test_checkout.py::test_total_includes_tax -x --lf
+# red: expected 121.00, got 100.00 → a tight signal on THIS bug
+```
+
+Ways to construct one, roughly in order:
+
+1. Failing test at whatever seam reaches the bug.
+2. Curl / HTTP script against a running dev server.
+3. CLI invocation with a fixture input, diffed against a known-good snapshot.
+4. Headless browser script asserting on DOM/console/network.
+5. Replay a captured trace in isolation.
+6. Throwaway harness over a minimal system subset.
+7. Property / fuzz loop over 1000 random inputs.
+8. Bisection harness between two known states.
+9. Differential loop: old vs new version, diff outputs.
+10. Last resort: `scripts/hitl-loop.template.sh` drives a human through a
+    structured loop.
+
+Build the right feedback loop, and the bug is 90% fixed.
+
+### When you genuinely cannot build a loop
+
+Stop and say so explicitly. List what you tried. Ask the user for:
+(a) access to whatever environment reproduces it, (b) a redacted captured
+artifact (HAR file, log dump, core dump), or (c) permission to add
+temporary production instrumentation. Do **not** proceed to hypothesise
+without a loop.
+
+## Phases 2–6
+
+Read `resources/phases.md` for the full protocol: reproduce + minimise →
+hypothesise (3–5 ranked, falsifiable, shown to the user) → instrument (one
+variable at a time, tagged logs) → fix with a regression test at a correct
+seam → cleanup.
+
+Guidance on tightening loops — speed, determinism, raising the
+reproduction rate of flaky bugs — lives in `resources/feedback-loops.md`.
+
+Done means: the original repro no longer reproduces, the regression test
+passes (or the absence of a correct seam is documented), all
+`[DEBUG-...]` instrumentation is removed, and the confirmed hypothesis is
+stated in the commit / PR message.
+</pre></details></div><script>
+function sortTable(th){
+  const t=th.closest('table'),tb=t.tBodies[0],idx=th.cellIndex;
+  const asc=!th.classList.contains('sorted-asc');
+  t.querySelectorAll('th').forEach(h=>h.classList.remove('sorted-asc','sorted-desc'));
+  th.classList.add(asc?'sorted-asc':'sorted-desc');
+  [...tb.rows].sort((a,b)=>{
+    const x=a.cells[idx]?.dataset.v??a.cells[idx]?.innerText??'';
+    const y=b.cells[idx]?.dataset.v??b.cells[idx]?.innerText??'';
+    const nx=parseFloat(x),ny=parseFloat(y);
+    if(!isNaN(nx)&&!isNaN(ny))return asc?nx-ny:ny-nx;
+    return asc?String(x).localeCompare(y):String(y).localeCompare(x);
+  }).forEach(r=>tb.appendChild(r));
+}
+document.querySelectorAll('table.sortable th').forEach(th=>
+  th.addEventListener('click',()=>sortTable(th)));
+document.querySelectorAll('input.filter').forEach(inp=>{
+  const sel=inp.dataset.target;inp.addEventListener('input',()=>{
+    const q=inp.value.toLowerCase();
+    document.querySelectorAll(sel+' [data-frow]').forEach(r=>{
+      r.style.display=r.innerText.toLowerCase().includes(q)?'':'none';
+    });
+  });
+});
+</script>

@@ -1,0 +1,32 @@
+id: commit-helper-v2
+title: v2 redesign
+status: draft
+rev: 2
+fields:
+  name: ''
+  description: ''
+  research_motivation: 'Hypothesis: Front-loaded trigger verbs raise activation recall'
+  problem_statement: Does explicit trigger wording improve activation?
+  target_capability: ''
+  target_users: []
+  use_cases: []
+  in_scope_tasks: []
+  out_of_scope_tasks: []
+  trigger_conditions: []
+  preconditions: []
+  required_context: []
+  execution_workflow: []
+  decision_rules: []
+  tool_requirements: []
+  resource_requirements: []
+  output_contract: ''
+  error_handling: []
+  safety_constraints: []
+  known_limitations: []
+  verification_strategy: ''
+  evaluation_criteria: []
+  compatible_environments: []
+related_findings: []
+generated_variants: []
+created: '2026-11-20'
+updated: '2026-11-20'
