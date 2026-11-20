@@ -40,6 +40,8 @@ function Nav() {
 function Overview() {
   const [data, setData] = useState({});
   const [st, setSt] = useState(null);
+  const [sh, setSh] = useState({ name: "", tasks: false, src: "",
+    force: false, msg: "" });
   useEffect(() => {
     Promise.all([api("/projects"), api("/skills"), api("/experiments"),
                  api("/releases"), api("/status")])
@@ -51,6 +53,13 @@ function Overview() {
   const cards = [["projects", data.projects], ["skills", data.skills],
                  ["experiments", data.experiments],
                  ["releases", data.releases]];
+  const post = (url, body) =>
+    api(url, { method: "POST", body: JSON.stringify(body) })
+      .then((r) => setSh({ ...sh, msg:
+        r.path ? `→ ${r.path}`
+               : `imported ${r.imported ?? 0}, skipped ` +
+                 `${r.skipped ?? 0}, rejected ${r.rejected ?? 0}` }))
+      .catch((e) => setSh({ ...sh, msg: String(e) }));
   return <Page>
     {st && <div style={{ ...card, fontSize: 12 }}>
       <b>lab:</b> {st.root} · <b>model:</b> {st.model}
@@ -61,6 +70,31 @@ function Overview() {
           `${k}=${n}`).join(" ")}</span>
       {(st.warnings || []).map((w, i) =>
         <div key={i} style={{ color: "#aa5" }}>warn: {w}</div>)}
+      <div style={{ marginTop: 6, borderTop: "1px solid #222",
+        paddingTop: 6 }}>
+        share pack:
+        <input value={sh.name} placeholder="export name" style={inp}
+          onChange={(e) => setSh({ ...sh, name: e.target.value })} />
+        <label style={{ fontSize: 11 }}>
+          <input type="checkbox" checked={sh.tasks}
+            onChange={(e) => setSh({ ...sh, tasks: e.target.checked })} />
+          +tasks</label>
+        <button disabled={!sh.name} onClick={() =>
+          post("/export", { name: sh.name, tasks: sh.tasks })}>
+          Export</button>
+        <input value={sh.src} placeholder="import from pack dir"
+          style={{ ...inp, width: 240, marginLeft: 12 }}
+          onChange={(e) => setSh({ ...sh, src: e.target.value })} />
+        <label style={{ fontSize: 11 }}>
+          <input type="checkbox" checked={sh.force}
+            onChange={(e) => setSh({ ...sh, force: e.target.checked })} />
+          force</label>
+        <button disabled={!sh.src} onClick={() =>
+          post("/import", { src: sh.src, force: sh.force })}>
+          Import</button>
+        {sh.msg && <span style={{ color: "#8f8", marginLeft: 8 }}>
+          {sh.msg}</span>}
+      </div>
     </div>}
     <div style={{ display: "grid", gap: 12,
                   gridTemplateColumns: "repeat(4,1fr)" }}>
@@ -791,7 +825,7 @@ function Experiments() {
   const [rep, setRep] = useState({});
   const [panel, setPanel] = useState({});
   const [aux, setAux] = useState({ batch: "", model: "", limit: "",
-    conclusion: "", a: "", b: "", newExp: "" });
+    conclusion: "", a: "", b: "", newExp: "", newCat: "trigger" });
   const load = () => {
     api("/experiments").then(setList).catch(() => {});
     api("/runs").then(setRuns).catch(() => {});
@@ -835,7 +869,7 @@ function Experiments() {
       .catch((e) => setMsg(String(e)));
   const create = () =>
     api("/experiments", { method: "POST",
-      body: JSON.stringify({ id: aux.newExp }) })
+      body: JSON.stringify({ id: aux.newExp, category: aux.newCat }) })
       .then(() => { setMsg(`created ${aux.newExp} — fill arms/tasks`);
         setAux({ ...aux, newExp: "" }); load(); })
       .catch((e) => setMsg(String(e)));
@@ -846,6 +880,12 @@ function Experiments() {
     <div style={{ fontSize: 12, marginBottom: 8 }}>
       <input {...ax("newExp")} placeholder="new experiment id"
         style={inp} />
+      <select value={aux.newCat} style={{ fontSize: 11 }}
+        onChange={(e) => setAux({ ...aux, newCat: e.target.value })}>
+        {["capability","trigger","workflow","instruction","resource",
+          "tool-use","compatibility","reliability","efficiency"]
+          .map((c) => <option key={c}>{c}</option>)}
+      </select>
       <button onClick={create} disabled={!aux.newExp}>Create</button>
       <span style={{ marginLeft: 16 }}>diff:
         <input {...ax("a")} placeholder="run A"
@@ -872,6 +912,8 @@ function Experiments() {
     </div>}
     {list.map((e) => <div key={e.id} style={card}>
       <b>{e.id}</b> [{e.status}] {e.title}
+      <span style={{ color: "#5af", fontSize: 11 }}>
+        {" "}{e.category || ""}</span>
       <div style={{ fontSize: 12, color: "#888" }}>
         arms: {e.arms.map((a) => a.name + "=" + (a.skill || "none")).join(", ")}
         · tasks: {e.tasks.join(", ") || "—"}

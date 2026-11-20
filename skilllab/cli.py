@@ -36,6 +36,7 @@ id: {eid}
 title: ""
 hypothesis: "TODO: a falsifiable claim about the independent variable"
 independent_var: skill_variant
+category: {cat}        # capability|trigger|workflow|instruction|resource|tool-use|compatibility|reliability|efficiency
 created: "{today}"
 status: designed
 fixed:
@@ -227,6 +228,7 @@ def cmd_experiment_new(args) -> int:
     d.mkdir(parents=True, exist_ok=True)
     (d / "experiment.yaml").write_text(EXP_TEMPLATE.format(
         eid=args.id, model=lab.cfg["model"], n=lab.cfg["rollouts_per_arm"],
+        cat=args.category,
         today=datetime.date.today().isoformat()))
     print(f"created {d/'experiment.yaml'} — fill in arms/tasks/hypothesis")
     return 0
@@ -242,7 +244,8 @@ def cmd_experiment_list(args) -> int:
             continue
         exp = lab.experiment(d.name)
         n = len(load_runs(lab, exp.id))
-        print(f"{exp.id:35} {exp.status:10} arms={len(exp.arms):2} "
+        print(f"{exp.id:35} {exp.status:10} "
+              f"{(exp.category or '-'):14} arms={len(exp.arms):2} "
               f"runs={n:3} {exp.title or exp.hypothesis[:50]}")
     return 0
 
@@ -1193,7 +1196,12 @@ def build_parser() -> argparse.ArgumentParser:
     x = ss.add_parser("new"); x.add_argument("id"); x.set_defaults(f=cmd_rubric_new)
 
     s = sub.add_parser("experiment"); ss = s.add_subparsers(dest="sub", required=True)
-    x = ss.add_parser("new"); x.add_argument("id"); x.set_defaults(f=cmd_experiment_new)
+    x = ss.add_parser("new"); x.add_argument("id")
+    x.add_argument("--category", default="trigger",
+                   choices=["capability", "trigger", "workflow",
+                            "instruction", "resource", "tool-use",
+                            "compatibility", "reliability", "efficiency"])
+    x.set_defaults(f=cmd_experiment_new)
     x = ss.add_parser("list"); x.set_defaults(f=cmd_experiment_list)
     x = ss.add_parser("conclude"); x.add_argument("exp"); x.add_argument("--conclusion", required=True); x.add_argument("--insight", action="append"); x.set_defaults(f=cmd_experiment_conclude)
     x = ss.add_parser("validate"); x.add_argument("exp"); x.set_defaults(f=cmd_experiment_validate)

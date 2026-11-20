@@ -3,6 +3,7 @@ title: Does specific trigger wording improve activation accuracy?
 hypothesis: v1 (concrete trigger examples) activates on positive tasks and stays quiet
   on negative ones; v2 (vague description) misbehaves
 independent_var: skill_variant
+category: trigger
 fixed:
   model: mock
   temperature: 0.0

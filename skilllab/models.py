@@ -150,6 +150,10 @@ class Rubric(BaseModel):
 
 InjectionMode = Literal["available", "injected"]
 IndependentVar = Literal["skill_variant", "model", "injection_mode", "harness"]
+ExpCategory = Literal[
+    "capability", "trigger", "workflow", "instruction", "resource",
+    "tool-use", "compatibility", "reliability", "efficiency",
+]
 
 
 class FixedConfig(BaseModel):
@@ -172,6 +176,7 @@ class Experiment(BaseModel):
     title: str = ""
     hypothesis: str = ""
     independent_var: IndependentVar = "skill_variant"
+    category: Optional[ExpCategory] = None
     fixed: FixedConfig = Field(default_factory=FixedConfig)
     arms: list[Arm] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)

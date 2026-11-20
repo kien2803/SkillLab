@@ -1169,6 +1169,7 @@ def skill_graduation(sid: str, l: Lab = Depends(lab)):
 
 class ExpIn(BaseModel):
     id: str
+    category: str = "trigger"
 
 
 @app.post("/api/v1/experiments", dependencies=[Depends(auth)])
@@ -1176,13 +1177,17 @@ def exp_new(body: ExpIn, l: Lab = Depends(lab)):
     """Scaffold experiment.yaml (template — fill arms/tasks)."""
     import datetime
     from skilllab.cli import EXP_TEMPLATE
+    from skilllab.models import ExpCategory
+    if body.category not in ExpCategory.__args__:
+        raise HTTPException(400, f"invalid category '{body.category}' — "
+                            f"one of {list(ExpCategory.__args__)}")
     d = l.experiments_dir / body.id
     if (d / "experiment.yaml").is_file():
         raise HTTPException(409, f"experiment '{body.id}' already exists")
     d.mkdir(parents=True, exist_ok=True)
     (d / "experiment.yaml").write_text(EXP_TEMPLATE.format(
         eid=body.id, model=l.cfg["model"],
-        n=l.cfg["rollouts_per_arm"],
+        n=l.cfg["rollouts_per_arm"], cat=body.category,
         today=datetime.date.today().isoformat()))
     return {"path": str(d / "experiment.yaml")}
 

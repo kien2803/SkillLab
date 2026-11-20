@@ -107,7 +107,7 @@ product. Work proceeds in independently testable vertical slices.
   refused), `blueprint draft` research-grounded prefill, unified
   proposal/approval/apply gate with original-content snapshots.
   Rules honored: diffs shown, no fabricated evidence, user approves.
-- **Phase 5 — Experiment + failure analysis** — DONE-lite: `blueprint experiment` scaffolds tasks+experiment from scope lists (draft tasks need authored checks); failure analyzer live. Remaining: experiment categories taxonomy, failure→candidate-variant loop. Original notes: experiment categories
+- **Phase 5 — Experiment + failure analysis** — DONE: `blueprint experiment` scaffolds tasks+experiment from scope lists (draft tasks need authored checks); failure analyzer live; `experiment.category` taxonomy (capability/trigger/workflow/instruction/resource/tool-use/compatibility/reliability/efficiency); `failure candidate` closes the failure→candidate-variant loop. Original notes: experiment categories
   (capability/trigger/workflow/instruction/resource/tool-use/
   compatibility/reliability/efficiency), experiments creatable from
   blueprint criteria or failed runs; failure analyzer: first observable
