@@ -160,3 +160,23 @@ python3 -m venv .venv
   insights.
 - `examples/demo-lab/` is a working lab: try `lab report exp-trigger-wording`
   from that dir.
+
+## Web API notes (post-audit)
+
+- `SKILLLAB_TOKEN` bearer auth covers ALL /api/* routes (middleware);
+  `/api/v1/health` is the only public route. `SKILLLAB_ENV=production`
+  refuses to start without a token. CORS via `SKILLLAB_CORS_ORIGINS`.
+- Imports over HTTP never take arbitrary server paths:
+  `/api/v1/import` reads packs under `<lab>/exports|imports/`,
+  `/api/v1/skills/import` accepts git URLs or `<lab>/imports/` dirs.
+- Jobs: `web/backend/jobs.py` — SQLite store (`<lab>/jobs/jobs.sqlite`),
+  per-key dedupe, cancel, logs. Deep-research runs go through
+  `POST /api/v1/research/{pid}/{rid}/run`; the SSE stream is GET-only
+  observe (fetch-streaming + AbortController on the client, since
+  EventSource can't send auth headers).
+- Skill file editor API: `GET /skills/{ref}/files`, `GET /file?path=`,
+  `PUT /file` (base_sha optimistic concurrency, auto snapshot to
+  variant `revisions/`).
+- `deep.execute` is resumable — per-step state in run.yaml, page texts
+  in fetched.json; `deep.candidate_findings` turns report bullets into
+  unverified findings for human promotion.
