@@ -460,3 +460,36 @@ def finding_status(pid: str, fid: str, body: StatusIn,
     except LabError as e:
         raise HTTPException(409, str(e))
     return {"id": fid, "status": body.status}
+
+
+from fastapi import UploadFile
+
+
+@app.post("/api/v1/projects/{pid}/sources/upload",
+          dependencies=[Depends(auth)])
+async def upload(pid: str, file: UploadFile, l: Lab = Depends(lab)):
+    """md/txt/html document upload -> text extract -> project source."""
+    from skilllab import research
+    name = file.filename or "doc"
+    if not name.lower().endswith((".md", ".txt", ".html", ".htm")):
+        raise HTTPException(400, "only .md/.txt/.html supported now")
+    raw = await file.read()
+    if len(raw) > 2_000_000:
+        raise HTTPException(413, "file >2MB")
+    text = raw.decode("utf-8", "replace")
+    if name.lower().endswith((".html", ".htm")):
+        import re as _re
+        text = _re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text,
+                       flags=_re.S | _re.I)
+        text = _re.sub(r"<[^>]+>", " ", text)
+        text = _re.sub(r"\s+", " ", text).strip()
+    try:
+        s = research.add_source(l, pid, "note", name,
+                                excerpt=text[:400])
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    d = research.project_dir(l, pid) / "sources" / "_uploads"
+    d.mkdir(exist_ok=True)
+    (d / name).write_text(text)
+    return {"source": s.model_dump(mode="json"),
+            "stored": str(d / name)}
