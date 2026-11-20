@@ -144,3 +144,29 @@ def save_source(lab, pid: str, fetched: dict,
             "content_hash": fetched["hash"],
             "cache": str(cache / f"{fetched['hash']}.txt"),
             "deduplicated": False}
+
+
+# ---------------- document extraction ----------------
+
+
+def extract_doc(path: str) -> str:
+    """Extract text from .docx (stdlib zip+xml) or .pdf (pypdf).
+    md/txt/html are handled by the upload route directly."""
+    import zipfile, xml.etree.ElementTree as ET
+    p = str(path)
+    low = p.lower()
+    if low.endswith(".docx"):
+        with zipfile.ZipFile(p) as z:
+            xml = z.read("word/document.xml")
+        root = ET.fromstring(xml)
+        ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        paras = [el.text or "" for el in root.iter(ns + "t")]
+        return re.sub(r"\s+", " ", " ".join(paras)).strip()
+    if low.endswith(".pdf"):
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            raise LabError("PDF needs pypdf — pip install pypdf")
+        return "\n".join(pg.extract_text() or ""
+                         for pg in PdfReader(p).pages)
+    raise LabError(f"unsupported document type: {low.rsplit('.',1)[-1]}")

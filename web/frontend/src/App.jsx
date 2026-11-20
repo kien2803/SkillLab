@@ -75,10 +75,22 @@ function Projects() {
       <b>Questions</b>
       <ul>{sel.questions.map((q) => (
         <li key={q.id}>{q.id} [{q.status}] {q.question}</li>))}</ul>
+      <AddForm ph="new question" onAdd={(v) =>
+        api(`/projects/${sel.meta.id}/questions`,
+            { method: "POST", body: JSON.stringify({ text: v }) })
+          .then(() => api("/projects/" + sel.meta.id).then(setSel))} />
       <b>Findings</b>
       <ul>{sel.findings.map((f) => (
         <li key={f.id}>{f.id} [{f.status}/{f.confidence}] {f.statement}</li>))}
-      </ul></div>}
+      </ul>
+      <AddForm ph="new finding" onAdd={(v) =>
+        api(`/projects/${sel.meta.id}/findings`,
+            { method: "POST", body: JSON.stringify({ statement: v }) })
+          .then(() => api("/projects/" + sel.meta.id).then(setSel))} />
+      <AddForm ph="new note title" onAdd={(v) =>
+        api(`/projects/${sel.meta.id}/notes`,
+            { method: "POST", body: JSON.stringify({ title: v }) })} />
+      </div>}
   </Page>;
 }
 
@@ -263,10 +275,15 @@ function DeepResearch() {
     api(`/projects/${pid}/research`,
         { method: "POST", body: JSON.stringify({ objective: obj }) })
       .then(setRun).catch((e) => setErr(String(e)));
-  const exec = () =>
-    api(`/research/${pid}/${run.id}/run`, { method: "POST" })
-      .then((s) => setRun({ ...run, state: s }))
-      .catch((e) => setErr(String(e)));
+  const exec = () => {
+    const es = new EventSource(`/api/v1/research/${pid}/${run.id}/stream`);
+    es.onmessage = (m) => {
+      const s = JSON.parse(m.data);
+      setRun((r) => ({ ...r, state: { ...(r.state||{}), ...s } }));
+      if (["completed","failed"].includes(s.status)) es.close();
+    };
+    es.onerror = () => { setErr("stream lost"); es.close(); };
+  };
   const show = () =>
     api(`/research/${pid}/${run.id}`).then((s) =>
       setRun({ ...run, state: s })).catch(() => {});
@@ -310,6 +327,15 @@ function BpEdit({ pid, bid, reload }) {
     <button onClick={save} disabled={!k}>Set</button>
     {msg && <span style={{ color: "#8f8", marginLeft: 8 }}>{msg}</span>}
   </div>;
+}
+
+function AddForm({ ph, onAdd }) {
+  const [v, setV] = useState("");
+  return <div style={{ margin: "6px 0" }}>
+    <input value={v} onChange={(e) => setV(e.target.value)}
+      placeholder={ph} style={{ width: 320, background: "#16181d",
+        color: "#ddd", border: "1px solid #333", padding: "4px 8px" }} />
+    <button onClick={() => { onAdd(v); setV(""); }}>+</button></div>;
 }
 
 const card = { border: "1px solid #333", borderRadius: 6, padding: 12,

@@ -471,12 +471,26 @@ async def upload(pid: str, file: UploadFile, l: Lab = Depends(lab)):
     """md/txt/html document upload -> text extract -> project source."""
     from skilllab import research
     name = file.filename or "doc"
-    if not name.lower().endswith((".md", ".txt", ".html", ".htm")):
-        raise HTTPException(400, "only .md/.txt/.html supported now")
+    if not name.lower().endswith(
+            (".md", ".txt", ".html", ".htm", ".docx", ".pdf")):
+        raise HTTPException(400,
+                            "supported: md/txt/html/docx/pdf")
     raw = await file.read()
     if len(raw) > 2_000_000:
         raise HTTPException(413, "file >2MB")
-    text = raw.decode("utf-8", "replace")
+    if name.lower().endswith((".docx", ".pdf")):
+        import tempfile
+        from skilllab import webio
+        with tempfile.NamedTemporaryFile(
+                suffix=name[name.rfind("."):], delete=False) as tf:
+            tf.write(raw)
+            tmp = tf.name
+        try:
+            text = webio.extract_doc(tmp)
+        except LabError as e:
+            raise HTTPException(400, str(e))
+    else:
+        text = raw.decode("utf-8", "replace")
     if name.lower().endswith((".html", ".htm")):
         import re as _re
         text = _re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text,
@@ -493,3 +507,48 @@ async def upload(pid: str, file: UploadFile, l: Lab = Depends(lab)):
     (d / name).write_text(text)
     return {"source": s.model_dump(mode="json"),
             "stored": str(d / name)}
+
+
+@app.get("/api/v1/research/{pid}/{rid}/stream")
+def dr_stream(pid: str, rid: str, l: Lab = Depends(lab)):
+    """SSE: stream run.yaml state while the job executes in a thread.
+    Polls the state file every 0.5s — no fabricated progress."""
+    import json, threading, time
+    from fastapi.responses import StreamingResponse
+    from skilllab import deep
+    rd = deep.runs_dir(l, pid) / rid
+    if not (rd / "run.yaml").is_file():
+        raise HTTPException(404, "research run not found")
+
+    st = deep.get(rd)
+    if st["status"] in ("planned", "approved", "failed"):
+        deep.approve(rd)
+        threading.Thread(
+            target=lambda: _safe_execute(l, pid, rd),
+            daemon=True).start()
+
+    def gen():
+        last = ""
+        for _ in range(7200):          # hard cap ~1h
+            cur = json.dumps(deep.get(rd))
+            if cur != last:
+                last = cur
+                yield f"data: {cur}\n\n"
+            st = deep.get(rd)["status"]
+            if st in ("completed", "failed"):
+                rep = rd / "report.md"
+                if rep.is_file():
+                    yield ("data: " + json.dumps(
+                        {"status": st,
+                         "report_md": rep.read_text()}) + "\n\n")
+                return
+            time.sleep(0.5)
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _safe_execute(l, pid, rd):
+    from skilllab import deep
+    try:
+        deep.execute(l, pid, rd, log=lambda m: None)
+    except Exception:
+        pass
