@@ -430,3 +430,33 @@ if _DIST.is_dir():
 
 
 
+
+
+class NoteIn(BaseModel):
+    title: str
+
+
+@app.post("/api/v1/projects/{pid}/notes", dependencies=[Depends(auth)])
+def add_note(pid: str, body: NoteIn, l: Lab = Depends(lab)):
+    from skilllab import research
+    try:
+        p = research.add_note(l, pid, body.title)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return {"path": str(p)}
+
+
+class StatusIn(BaseModel):
+    status: str
+
+
+@app.post("/api/v1/projects/{pid}/findings/{fid}/status",
+          dependencies=[Depends(auth)])
+def finding_status(pid: str, fid: str, body: StatusIn,
+                   l: Lab = Depends(lab)):
+    from skilllab import research
+    try:
+        research.set_finding_status(l, pid, fid, body.status)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"id": fid, "status": body.status}
