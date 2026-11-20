@@ -45,3 +45,48 @@ test("run detail 404 for unknown run", async ({ page }) => {
   const r = await page.request.get("/api/v1/runs/no-such-run");
   expect(r.status()).toBe(404);
 });
+
+test("knowledge page lists insights + principles", async ({ page }) => {
+  await page.goto("/knowledge");
+  await expect(page.getByText("specific-trigger-descriptions"))
+    .toBeVisible();
+  await expect(page.getByText("[principle]")).toBeVisible();
+});
+
+test("regressions page shows stored verdicts", async ({ page }) => {
+  await page.goto("/regressions");
+  await expect(page.getByText("reg-commit-helper-v1-v2-bad-01"))
+    .toBeVisible();
+  const r = await page.request.get(
+    "/api/v1/regressions/reg-commit-helper-v1-v2-bad-01");
+  expect(r.ok()).toBeTruthy();
+  const j = await r.json();
+  expect(j.report.verdict).toBe("regressed");
+  expect(j.report.counts.activation).toBe(1);
+});
+
+test("release detail carries computed checklist", async ({ page }) => {
+  const r = await page.request.get(
+    "/api/v1/releases/commit-helper/1.0.0");
+  expect(r.ok()).toBeTruthy();
+  const j = await r.json();
+  expect(j.release.status).toBe("released");
+  const ids = j.checklist.map((c) => c.id);
+  expect(ids).toContain("evaluated-evidence");
+  expect(j.checklist.every((c) => c.ok)).toBeTruthy();
+});
+
+test("write gates on lifecycle endpoints", async ({ page }) => {
+  for (const [method, url, data] of [
+    ["post", "/api/v1/insights", { title: "x" }],
+    ["post", "/api/v1/regressions",
+     { skill: "s", baseline: "a", candidate: "b" }],
+    ["post", "/api/v1/releases", { skill: "s", version: "1",
+                                   variant: "v" }],
+    ["post", "/api/v1/releases/s/1/status", { status: "released" }],
+    ["post", "/api/v1/insights/x/confirm", {}],
+  ]) {
+    const r = await page.request[method](url, { data });
+    expect(r.status()).toBe(401);
+  }
+});

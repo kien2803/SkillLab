@@ -16,7 +16,8 @@ const api = (p, opts = {}) =>
 function Nav() {
   const items = [["/", "Overview"], ["/projects", "Research"],
                  ["/explorer", "Web Explorer"], ["/deep", "Deep Research"], ["/skills", "Skill Studio"],
-                 ["/blueprints", "Blueprints"], ["/experiments", "Experiments"], ["/proposals", "AI Architect"], ["/failures", "Failures"], ["/releases", "Releases"]];
+                 ["/blueprints", "Blueprints"], ["/experiments", "Experiments"], ["/regressions", "Regressions"],
+                 ["/proposals", "AI Architect"], ["/failures", "Failures"], ["/knowledge", "Knowledge"], ["/releases", "Releases"]];
   const [tk, setTk] = useState(tok());
   return (
     <nav style={{ display: "flex", gap: 16, borderBottom: "1px solid #333",
@@ -197,13 +198,278 @@ function Failures() {
 
 function Releases() {
   const [list, setList] = useState([]);
-  useEffect(() => { api("/releases").then(setList).catch(() => {}); }, []);
+  const [skills, setSkills] = useState([]);
+  const [det, setDet] = useState(null);
+  const [form, setForm] = useState({ skill: "", version: "",
+    variant: "", changelog: "" });
+  const [msg, setMsg] = useState("");
+  const load = () => api("/releases").then(setList).catch(() => {});
+  useEffect(() => { load();
+    api("/skills").then(setSkills).catch(() => {}); }, []);
+  const open = (r) =>
+    api(`/releases/${r.skill}/${r.version}`).then(setDet)
+      .catch((e) => setMsg(String(e)));
+  const create = () =>
+    api("/releases", { method: "POST", body: JSON.stringify(form) })
+      .then(() => { setMsg(`created ${form.skill}@${form.version}`);
+        setForm({ ...form, version: "", changelog: "" }); load(); })
+      .catch((e) => setMsg(String(e)));
+  const setStatus = (r, status) =>
+    api(`/releases/${r.skill}/${r.version}/status`,
+        { method: "POST", body: JSON.stringify({ status }) })
+      .then(() => { setMsg(`${r.skill}@${r.version} → ${status}`);
+        setDet(null); load(); })
+      .catch((e) => setMsg(String(e)));
+  const NEXT = { draft: ["candidate"], candidate: ["validated", "draft"],
+    validated: ["released", "candidate"], released: ["deprecated"],
+    deprecated: [] };
+  const variants = (skills.find((s) => s.id === form.skill) || {})
+    .variants || [];
   return <Page><h2>Release Center</h2>
+    {msg && <p style={{ color: "#8f8" }}>{msg}</p>}
+    <div style={card}>
+      <b>New release</b>
+      <div style={{ display: "flex", gap: 8, marginTop: 6,
+        flexWrap: "wrap" }}>
+        <select value={form.skill}
+          onChange={(e) => setForm({ ...form, skill: e.target.value,
+            variant: "" })}>
+          <option value="">skill…</option>
+          {skills.map((s) => <option key={s.id}
+            value={s.id}>{s.id}</option>)}
+        </select>
+        <select value={form.variant}
+          onChange={(e) => setForm({ ...form, variant: e.target.value })}>
+          <option value="">variant…</option>
+          {variants.map((v) => <option key={v.id}
+            value={v.id}>{v.id}</option>)}
+        </select>
+        <input value={form.version} placeholder="version (e.g. 1.0.0)"
+          style={inp} onChange={(e) => setForm({ ...form,
+            version: e.target.value })} />
+        <input value={form.changelog} placeholder="changelog"
+          style={{ ...inp, width: 260 }}
+          onChange={(e) => setForm({ ...form,
+            changelog: e.target.value })} />
+        <button onClick={create}
+          disabled={!form.skill || !form.variant || !form.version}>
+          Create draft</button>
+      </div>
+    </div>
     {list.map((r, i) => (
       <div key={i} style={card}>
-        <b>{r.skill}@{r.version}</b> — {r.variant} [{r.status}]
+        <a href="#" onClick={() => open(r)}>
+          <b>{r.skill}@{r.version}</b></a>
+        {" "}— {r.variant} [{r.status}]
+        <span style={{ marginLeft: 10 }}>
+          {(NEXT[r.status] || []).map((s) => (
+            <button key={s} style={{ marginRight: 4 }}
+              onClick={() => setStatus(r, s)}>→ {s}</button>))}
+        </span>
         <div style={{ color: "#888", fontSize: 12 }}>{r.changelog}</div>
-      </div>))}</Page>;
+      </div>))}
+    {det && <div style={card}>
+      <h3>{det.release.skill}@{det.release.version} — checklist</h3>
+      <table style={{ fontSize: 12, borderCollapse: "collapse" }}>
+        <thead><tr>{["check","required","ok","detail"].map((h) =>
+          <th key={h} style={th}>{h}</th>)}</tr></thead>
+        <tbody>{det.checklist.map((c) => <tr key={c.id}>
+          <td style={td}><b>{c.id}</b></td>
+          <td style={td}>{c.required ? "yes" : "no"}</td>
+          <td style={{ ...td, color: c.ok ? "#8f8" : "#f88" }}>
+            {c.ok ? "✓" : "✗"}</td>
+          <td style={{ ...td, color: "#888" }}>{c.detail}</td>
+        </tr>)}</tbody></table>
+      {det.release.released_at && <p style={{ fontSize: 11,
+        color: "#888" }}>released at {det.release.released_at}</p>}
+    </div>}
+  </Page>;
+}
+
+const inp = { background: "#0a0c0f", color: "#ddd", padding: "4px 6px",
+              border: "1px solid #333", width: 140 };
+
+function Knowledge() {
+  const [list, setList] = useState([]);
+  const [det, setDet] = useState(null);
+  const [form, setForm] = useState({ title: "", evidence: "" });
+  const [msg, setMsg] = useState("");
+  const load = () => api("/insights").then(setList).catch(() => {});
+  useEffect(load, []);
+  const open = (i) => api("/insights/" + i.id).then(setDet)
+    .catch((e) => setMsg(String(e)));
+  const create = () =>
+    api("/insights", { method: "POST", body: JSON.stringify(form) })
+      .then(() => { setMsg(`insight '${form.title}' created`);
+        setForm({ title: "", evidence: "" }); load(); })
+      .catch((e) => setMsg(String(e)));
+  const act = (id, a) =>
+    api(`/insights/${id}/${a}`, { method: "POST" })
+      .then(() => { setMsg(`${id}: ${a} ok`); setDet(null); load(); })
+      .catch((e) => setMsg(String(e)));
+  return <Page><h2>Knowledge Base</h2>
+    {msg && <p style={{ color: "#8f8" }}>{msg}</p>}
+    <div style={card}>
+      <b>New insight</b>
+      <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+        <input value={form.title} placeholder="title"
+          style={{ ...inp, width: 300 }}
+          onChange={(e) => setForm({ ...form, title: e.target.value })} />
+        <input value={form.evidence}
+          placeholder="evidence (experiment/run id)"
+          style={{ ...inp, width: 300 }}
+          onChange={(e) => setForm({ ...form, evidence: e.target.value })} />
+        <button onClick={create} disabled={!form.title}>Create</button>
+      </div>
+    </div>
+    {list.map((i) => <div key={i.id} style={card}>
+      <a href="#" onClick={() => open(i)}><b>{i.id}</b></a>
+      <span style={{ fontSize: 12, color: "#888" }}>
+        {" "}[{i.kind}] {i.status} · {i.confidence} ·
+        evidence: {(i.evidence || []).join(", ") || "—"}</span>
+      {i.kind === "insight" && <span style={{ marginLeft: 10 }}>
+        {i.status !== "confirmed" &&
+          <button onClick={() => act(i.id, "confirm")}>Confirm</button>}
+        {i.status !== "refuted" &&
+          <button onClick={() => act(i.id, "refute")}
+            style={{ marginLeft: 4 }}>Refute</button>}
+        {i.status === "confirmed" &&
+          <button onClick={() => act(i.id, "promote")}
+            style={{ marginLeft: 4 }}>Promote</button>}
+      </span>}
+    </div>)}
+    {det && <div style={card}>
+      <h3>{det.id} <span style={{ color: "#888", fontSize: 12 }}>
+        [{det.kind}]</span></h3>
+      <table style={{ fontSize: 12, borderCollapse: "collapse" }}>
+        <tbody>{Object.entries(det.frontmatter).map(([k, v]) =>
+          <tr key={k}>
+            <td style={{ ...td, color: "#888" }}>{k}</td>
+            <td style={td}>{Array.isArray(v) ? v.join(", ") : String(v)}
+            </td></tr>)}</tbody></table>
+      <pre style={{ fontSize: 12, whiteSpace: "pre-wrap",
+        background: "#0a0c0f", padding: 8, marginTop: 8 }}>{det.body}</pre>
+    </div>}
+  </Page>;
+}
+
+function Regressions() {
+  const [list, setList] = useState([]);
+  const [skills, setSkills] = useState([]);
+  const [det, setDet] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [form, setForm] = useState({ skill: "", baseline: "",
+    candidate: "", tasks: "default", mode: "", rollouts: "" });
+  const load = () => api("/regressions").then(setList).catch(() => {});
+  useEffect(() => { load();
+    api("/skills").then(setSkills).catch(() => {}); }, []);
+  const open = (id) => api("/regressions/" + id).then(setDet)
+    .catch((e) => setMsg(String(e)));
+  const run = () => {
+    const body = { skill: form.skill, baseline: form.baseline,
+      candidate: form.candidate, tasks: form.tasks || "default" };
+    if (form.mode) body.mode = form.mode;
+    if (form.rollouts) body.rollouts = parseInt(form.rollouts, 10);
+    api("/regressions", { method: "POST", body: JSON.stringify(body) })
+      .then((r) => { setMsg(`regression '${r.id}' complete`); load(); })
+      .catch((e) => setMsg(String(e)));
+  };
+  const variants = (skills.find((s) => s.id === form.skill) || {})
+    .variants || [];
+  const fmt = (m, k, pct) => m && m[k] != null
+    ? (pct ? (m[k] * 100).toFixed(0) + "%"
+      : typeof m[k] === "number" ? m[k].toFixed(2) : m[k])
+    : "—";
+  return <Page><h2>Regressions</h2>
+    {msg && <p style={{ color: "#8f8" }}>{msg}</p>}
+    <div style={card}>
+      <b>Run regression</b>
+      <div style={{ display: "flex", gap: 8, marginTop: 6,
+        flexWrap: "wrap" }}>
+        <select value={form.skill}
+          onChange={(e) => setForm({ ...form, skill: e.target.value,
+            baseline: "", candidate: "" })}>
+          <option value="">skill…</option>
+          {skills.map((s) => <option key={s.id}
+            value={s.id}>{s.id}</option>)}
+        </select>
+        <select value={form.baseline}
+          onChange={(e) => setForm({ ...form, baseline: e.target.value })}>
+          <option value="">baseline…</option>
+          {variants.map((v) => <option key={v.id}
+            value={v.id}>{v.id}</option>)}
+        </select>
+        <select value={form.candidate}
+          onChange={(e) => setForm({ ...form, candidate: e.target.value })}>
+          <option value="">candidate…</option>
+          {variants.filter((v) => v.id !== form.baseline).map((v) =>
+            <option key={v.id} value={v.id}>{v.id}</option>)}
+        </select>
+        <input value={form.tasks} placeholder="tasks (default)"
+          style={inp}
+          onChange={(e) => setForm({ ...form, tasks: e.target.value })} />
+        <select value={form.mode}
+          onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+          <option value="">mode…</option>
+          <option value="available">available</option>
+          <option value="injected">injected</option>
+        </select>
+        <input value={form.rollouts} placeholder="rollouts" type="number"
+          style={{ ...inp, width: 80 }}
+          onChange={(e) => setForm({ ...form, rollouts: e.target.value })} />
+        <button onClick={run}
+          disabled={!form.skill || !form.baseline || !form.candidate}>
+          Run</button>
+      </div>
+    </div>
+    {list.map((r) => <div key={r.id} style={card}>
+      <a href="#" onClick={() => open(r.id)}><b>{r.id}</b></a>
+      <span style={{ fontSize: 12, color: "#888" }}>
+        {" "}{r.skill} {r.baseline}→{r.candidate} ·
+        model {r.model} · {r.tasks?.length || 0} tasks ·
+        [{r.status}]</span>
+      <b style={{ marginLeft: 8,
+        color: r.verdict === "clean" ? "#8f8"
+          : r.verdict === "regressed" ? "#f88" : "#aa5" }}>
+        {r.verdict || "—"}</b>
+    </div>)}
+    {det && <div style={card}>
+      <h3>{det.meta.id}
+        {det.report && <span style={{ fontSize: 12, marginLeft: 8,
+          color: det.report.verdict === "clean" ? "#8f8"
+            : det.report.verdict === "regressed" ? "#f88" : "#aa5" }}>
+          [{det.report.verdict}]</span>}</h3>
+      {det.report && <>
+        <div style={{ fontSize: 12, color: "#888" }}>
+          categories: {Object.entries(det.report.counts || {})
+            .filter(([, n]) => n > 0)
+            .map(([k, n]) => `${k}=${n}`).join(", ") || "none"}
+        </div>
+        <table style={{ fontSize: 11, borderCollapse: "collapse",
+          marginTop: 8 }}>
+          <thead><tr>{["task","kind","categories",
+            "base score","cand score","base tok","cand tok",
+            "base lat","cand lat"].map((h) =>
+              <th key={h} style={th}>{h}</th>)}</tr></thead>
+          <tbody>{det.report.tasks.map((t) => <tr key={t.task}>
+            <td style={td}><b>{t.task}</b></td>
+            <td style={td}>{t.kind}</td>
+            <td style={{ ...td,
+              color: t.categories.length ? "#f88" : "#8f8" }}>
+              {t.categories.join(", ") || "clean"}</td>
+            <td style={td}>{fmt(t.baseline, "score")}</td>
+            <td style={td}>{fmt(t.candidate, "score")}</td>
+            <td style={td}>{fmt(t.baseline, "tokens")}</td>
+            <td style={td}>{fmt(t.candidate, "tokens")}</td>
+            <td style={td}>{fmt(t.baseline, "latency")}</td>
+            <td style={td}>{fmt(t.candidate, "latency")}</td>
+          </tr>)}</tbody></table></>}
+      {det.markdown && <pre style={{ fontSize: 11,
+        whiteSpace: "pre-wrap", maxHeight: 300, overflow: "auto",
+        background: "#0a0c0f", padding: 8, marginTop: 8 }}>
+        {det.markdown}</pre>}
+    </div>}
+  </Page>;
 }
 
 function Experiments() {
@@ -543,8 +809,10 @@ export default function App() {
     <Route path="/blueprints" element={<Blueprints />} />
     <Route path="/experiments" element={<Experiments />} />
     <Route path="/runs/:rid" element={<RunDetail />} />
+    <Route path="/regressions" element={<Regressions />} />
     <Route path="/proposals" element={<Proposals />} />
     <Route path="/failures" element={<Failures />} />
+    <Route path="/knowledge" element={<Knowledge />} />
     <Route path="/releases" element={<Releases />} />
   </Routes></>);
 }

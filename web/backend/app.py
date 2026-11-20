@@ -657,6 +657,159 @@ def exp_report(eid: str, l: Lab = Depends(lab)):
     return {"experiment": eid, "markdown": build_report(l, exp)}
 
 
+# ---------------- knowledge base: insights + principles ----------------
+
+@app.get("/api/v1/insights")
+def insights(l: Lab = Depends(lab)):
+    """Insights AND promoted principles — `kind` field distinguishes."""
+    from skilllab.insights import list_insights
+    return list_insights(l)
+
+
+@app.get("/api/v1/insights/{iid}")
+def insight_detail(iid: str, l: Lab = Depends(lab)):
+    from skilllab.models import parse_frontmatter
+    for d, kind in ((l.insights_dir, "insight"),
+                    (l.principles_dir, "principle")):
+        p = d / f"{iid}.md"
+        if p.is_file():
+            fm, body = parse_frontmatter(p.read_text())
+            return {"id": fm.get("id", p.stem), "kind": kind,
+                    "frontmatter": fm, "body": body}
+    raise HTTPException(404, f"insight '{iid}' not found")
+
+
+class InsightIn(BaseModel):
+    title: str
+    evidence: str = ""
+
+
+@app.post("/api/v1/insights", dependencies=[Depends(auth)])
+def insight_new(body: InsightIn, l: Lab = Depends(lab)):
+    from skilllab.insights import new_insight
+    try:
+        p = new_insight(l, body.title, body.evidence)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"path": str(p)}
+
+
+@app.post("/api/v1/insights/{iid}/{action}", dependencies=[Depends(auth)])
+def insight_action(iid: str, action: str, l: Lab = Depends(lab)):
+    """confirm (needs valid evidence refs) / refute / promote (gated on
+    >=2 independent experiments, scope, no TODOs — enforced server-side)."""
+    from skilllab import insights as ins
+    fn = {"confirm": ins.confirm, "refute": ins.refute,
+          "promote": ins.promote}.get(action)
+    if fn is None:
+        raise HTTPException(
+            400, f"unknown action '{action}' — confirm|refute|promote")
+    try:
+        p = fn(l, iid)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"id": iid, "action": action, "path": str(p)}
+
+
+# ---------------- regressions ----------------
+
+@app.get("/api/v1/regressions")
+def regressions(l: Lab = Depends(lab)):
+    from skilllab.regression import list_regressions
+    return list_regressions(l)
+
+
+@app.get("/api/v1/regressions/{rid}")
+def regression_detail(rid: str, l: Lab = Depends(lab)):
+    from skilllab.models import load_yaml
+    d = l.d("regressions") / rid
+    if not (d / "regression.yaml").is_file():
+        raise HTTPException(404, f"regression '{rid}' not found")
+    out = {"meta": load_yaml(d / "regression.yaml")}
+    ry = d / "report.yaml"
+    if ry.is_file():
+        out["report"] = load_yaml(ry)
+    rm = d / "report.md"
+    if rm.is_file():
+        out["markdown"] = rm.read_text()
+    return out
+
+
+class RegIn(BaseModel):
+    skill: str
+    baseline: str
+    candidate: str
+    tasks: str = "default"           # all|default|<suite>|<csv ids>
+    model: str | None = None
+    mode: str | None = None          # available | injected
+    rollouts: int | None = None
+    thresholds: dict[str, float] = {}
+
+
+@app.post("/api/v1/regressions", dependencies=[Depends(auth)])
+def regression_run(body: RegIn, l: Lab = Depends(lab)):
+    from skilllab.regression import run_regression
+    if body.mode is not None and body.mode not in ("available", "injected"):
+        raise HTTPException(400, "mode must be 'available' or 'injected'")
+    try:
+        rid = run_regression(l, body.skill, body.baseline, body.candidate,
+                             body.tasks, model=body.model, mode=body.mode,
+                             rollouts=body.rollouts,
+                             overrides=body.thresholds or None)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"id": rid,
+            "note": "synchronous — fine for mock; real models need "
+                    "the worker queue"}
+
+
+# ---------------- releases: create + lifecycle ----------------
+
+class ReleaseIn(BaseModel):
+    skill: str
+    version: str
+    variant: str                     # "v3-bp" or full "skill@v3-bp"
+    changelog: str = ""
+
+
+@app.post("/api/v1/releases", dependencies=[Depends(auth)])
+def release_new(body: ReleaseIn, l: Lab = Depends(lab)):
+    from skilllab.release import new_release
+    try:
+        p = new_release(l, body.skill, body.version, body.variant,
+                        body.changelog)
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"path": str(p)}
+
+
+@app.get("/api/v1/releases/{skill}/{version}")
+def release_detail(skill: str, version: str, l: Lab = Depends(lab)):
+    from skilllab.release import checklist, list_releases
+    r = next((r for r in list_releases(l, skill)
+              if r.version == version), None)
+    if r is None:
+        raise HTTPException(404, f"release '{skill}@{version}' not found")
+    return {"release": r.model_dump(mode="json"),
+            "checklist": checklist(l, skill, version)}
+
+
+@app.post("/api/v1/releases/{skill}/{version}/status",
+          dependencies=[Depends(auth)])
+def release_status(skill: str, version: str, body: StatusIn,
+                   l: Lab = Depends(lab)):
+    from skilllab.release import set_status
+    valid = {"draft", "candidate", "validated", "released", "deprecated"}
+    if body.status not in valid:
+        raise HTTPException(
+            400, f"status must be one of {sorted(valid)}")
+    try:
+        set_status(l, skill, version, body.status)   # 'released' gated
+    except LabError as e:
+        raise HTTPException(409, str(e))
+    return {"skill": skill, "version": version, "status": body.status}
+
+
 # ---- production: serve the built SPA from the same port -------------
 # NOTE: must stay LAST — a `/{path:path}` GET registered earlier would
 # shadow every /api/v1 GET route defined below it.
