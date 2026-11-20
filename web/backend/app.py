@@ -313,3 +313,32 @@ def web_fetch(body: FetchIn):
         return webio.fetch(body.url)
     except LabError as e:
         raise HTTPException(400, str(e))
+
+
+class SaveIn(BaseModel):
+    url: str
+
+
+@app.post("/api/v1/projects/{pid}/sources/from-url",
+          dependencies=[Depends(auth)])
+def source_from_url(pid: str, body: SaveIn, l: Lab = Depends(lab)):
+    from skilllab import webio
+    try:
+        return webio.save_source(l, pid, webio.fetch(body.url))
+    except LabError as e:
+        raise HTTPException(400, str(e))
+
+
+class AnnotIn(BaseModel):
+    note: str
+
+
+@app.post("/api/v1/projects/{pid}/sources/{sid}/annotate",
+          dependencies=[Depends(auth)])
+def annotate(pid: str, sid: str, body: AnnotIn, l: Lab = Depends(lab)):
+    from skilllab import research
+    try:
+        research.annotate_source(l, pid, sid, body.note)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    return {"id": sid, "annotated": True}

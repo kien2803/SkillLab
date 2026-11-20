@@ -115,3 +115,32 @@ def search(lab, query: str, limit: int = 10) -> list[dict]:
                 for r in data.get("results") or []]
     raise LabError(f"unknown search provider '{prov}' "
                    "(brave|tavily supported)")
+
+
+# ---------------- save to research project ----------------
+
+
+def save_source(lab, pid: str, fetched: dict,
+                excerpt_len: int = 400) -> dict:
+    """Persist a fetched page as a project source. Dedupes by final URL
+    — re-saving returns the existing record and never clobbers
+    annotations. Full extracted text goes to a content-addressed cache
+    so the yaml stays Git-friendly."""
+    from . import research
+    from .models import dump_yaml
+    url = fetched["final_url"].rstrip("/").lower()
+    for s in research.list_sources(lab, pid):
+        if s.url.rstrip("/").lower() == url:
+            return {"source": s.model_dump(mode="json"),
+                    "deduplicated": True}
+    s = research.add_source(
+        lab, pid, "url", fetched["title"] or fetched["final_url"],
+        url=fetched["final_url"], author="",
+        excerpt=fetched["text"][:excerpt_len])
+    cache = research.project_dir(lab, pid) / "sources" / "_cache"
+    cache.mkdir(exist_ok=True)
+    (cache / f"{fetched['hash']}.txt").write_text(fetched["text"])
+    return {"source": s.model_dump(mode="json"),
+            "content_hash": fetched["hash"],
+            "cache": str(cache / f"{fetched['hash']}.txt"),
+            "deduplicated": False}

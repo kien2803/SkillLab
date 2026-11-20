@@ -1636,3 +1636,23 @@ def test_webio_search_no_provider(lab):
     from skilllab.webio import search
     with pytest.raises(LabError, match="no search provider"):
         search(lab, "test query")
+
+
+def test_webio_save_source_dedupe(lab, tmp_path):
+    from skilllab.webio import save_source
+    from skilllab import research
+    research.new_project(lab, "wp", "W")
+    page = {"url": "https://x.test/a", "final_url": "https://x.test/a",
+            "title": "T", "text": "body text " * 100,
+            "hash": "ab12", "bytes": 100}
+    r1 = save_source(lab, "wp", page)
+    assert not r1["deduplicated"]
+    research.annotate_source(lab, "wp", r1["source"]["id"], "note")
+    r2 = save_source(lab, "wp", page)
+    assert r2["deduplicated"]
+    assert r2["source"]["id"] == r1["source"]["id"]
+    assert r2["source"]["annotations"] == ["note"]
+    # trailing slash / case variants dedupe too
+    page2 = dict(page, final_url="HTTPS://X.TEST/a/")
+    r3 = save_source(lab, "wp", page2)
+    assert r3["deduplicated"]
