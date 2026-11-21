@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
 
-from skilllab.lab import Lab, LabError
+from skilllab.lab import Lab, LabError, check_id
 
 LAB_DIR = Path(os.environ.get("SKILLLAB_DIR", "examples/demo-lab"))
 
@@ -419,6 +419,89 @@ def skill_file_write(ref: str, body: FileWriteIn, l: Lab = Depends(lab)):
             "revision": old is not None}
 
 
+# ---------------- revisions (Skill Editor history) ------------------
+
+def _rev_dir(l: Lab, ref: str) -> Path:
+    return _vdir(l, ref) / "revisions"
+
+
+@app.get("/api/v1/skills/{ref}/revisions")
+def skill_revisions(ref: str, path: str, l: Lab = Depends(lab)):
+    """List snapshots for one file, newest first."""
+    rd = _rev_dir(l, ref)
+    stem = path.replace("/", "__")
+    out = []
+    if rd.is_dir():
+        for p in sorted(rd.glob(f"*-{stem}"), reverse=True):
+            if p.is_file() and not p.is_symlink():
+                out.append({"rev": p.name[:15], "file": p.name,
+                            "bytes": p.stat().st_size,
+                            "ts": p.name[:15]})
+    return {"path": path, "revisions": out}
+
+
+@app.get("/api/v1/skills/{ref}/revision")
+def skill_revision_read(ref: str, path: str, rev: str,
+                        l: Lab = Depends(lab)):
+    """Read one snapshot — never writable through this route."""
+    fname = f"{rev}-{path.replace('/', '__')}"
+    p = (_rev_dir(l, ref) / fname).resolve()
+    if not p.is_relative_to(_rev_dir(l, ref).resolve()) \
+            or not p.is_file():
+        raise HTTPException(404, "revision not found")
+    try:
+        return {"path": path, "rev": rev, "text": p.read_text()}
+    except UnicodeDecodeError:
+        raise HTTPException(415, "binary revision")
+
+
+class RestoreIn(BaseModel):
+    path: str
+    rev: str
+    base_sha: str = ""
+
+
+@app.post("/api/v1/skills/{ref}/restore", dependencies=[Depends(auth)])
+def skill_revision_restore(ref: str, body: RestoreIn,
+                           l: Lab = Depends(lab)):
+    """Restore a snapshot into the file. The CURRENT content is first
+    snapshotted itself — restore is an edit, never a history rewrite."""
+    import hashlib
+    from datetime import datetime
+    src = skill_revision_read(ref, body.path, body.rev, l)["text"]
+    p = _variant_file(l, ref, body.path)
+    old = p.read_bytes() if p.exists() else b""
+    cur = hashlib.sha256(old).hexdigest()[:12] if old else ""
+    if body.base_sha != cur:
+        raise HTTPException(409, f"file changed since you loaded it "
+                           f"(current {cur or 'none'})")
+    rd = _rev_dir(l, ref)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / (datetime.now().strftime("%Y%m%d-%H%M%S") + "-" +
+           body.path.replace("/", "__"))).write_bytes(old)
+    p.write_text(src)
+    return {"path": body.path, "restored_from": body.rev,
+            "sha": hashlib.sha256(p.read_bytes()).hexdigest()[:12]}
+
+
+@app.delete("/api/v1/skills/{ref}/file", dependencies=[Depends(auth)])
+def skill_file_delete(ref: str, path: str, l: Lab = Depends(lab)):
+    """Delete a file — snapshots it first (recoverable via revisions)."""
+    from datetime import datetime
+    p = _variant_file(l, ref, path)
+    if not p.is_file():
+        raise HTTPException(404, "file not found")
+    if p.name == "SKILL.md":
+        raise HTTPException(400, "SKILL.md is the variant entry — "
+                            "edit it, don't delete it")
+    rd = _rev_dir(l, ref)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / (datetime.now().strftime("%Y%m%d-%H%M%S") + "-" +
+           path.replace("/", "__"))).write_bytes(p.read_bytes())
+    p.unlink()
+    return {"deleted": path}
+
+
 @app.post("/api/v1/skills/{ref}/proposals", dependencies=[Depends(auth)])
 def suggest(ref: str, l: Lab = Depends(lab), llm: bool = False):
     """Deterministic patch proposals; ?llm=true asks the lab model for
@@ -590,11 +673,49 @@ def dr_get(pid: str, rid: str, l: Lab = Depends(lab)):
     return st
 
 
+def _preflight(l: Lab, eid: str, arm=None, limit=None, batch=None,
+               model=None, force=False):
+    """Synchronous validation for a run — raises HTTPException on any
+    condition that must stop execution before a job is enqueued."""
+    import re
+    from skilllab.engine import (planned_run_ids,
+                                 validate_experiment)
+    try:
+        exp = l.experiment(eid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    if exp.status == "concluded":
+        raise HTTPException(409, f"experiment '{eid}' is concluded "
+                               "(immutable) — start a new experiment")
+    errors, warns = validate_experiment(l, exp)
+    if errors:
+        raise HTTPException(409, "experiment invalid: "
+                               + "; ".join(errors))
+    if model and model != exp.fixed.model and not batch:
+        batch = re.sub(r"[^a-z0-9-]+", "-", model.lower())[:40]
+    planned = planned_run_ids(exp, arm, limit, batch)
+    existing = [r for r in planned
+                if (l.runs_dir / r / "run.yaml").is_file()]
+    if existing and not force:
+        raise HTTPException(
+            409, f"{len(existing)}/{len(planned)} planned run(s) exist "
+                 f"(e.g. {existing[0]}) — use batch or force")
+    return exp, batch, planned, warns
+
+
 @app.post("/api/v1/experiments/{eid}/run", dependencies=[Depends(auth)])
 def run_exp(eid: str, l: Lab = Depends(lab)):
-    """`lab run` — validates first, evaluates each rollout, refuses
-    concluded experiments and existing run ids."""
-    return _exec_runs(l, eid, None, None, None, None, False)
+    """Enqueue `lab run` as a background job — returns the job id;
+    progress via GET /api/v1/jobs/{id} (count is real rollouts done)."""
+    exp, batch, planned, _ = _preflight(l, eid)
+
+    def work(job):
+        _exec_runs(l, eid, None, None, batch, None, False,
+                   job=job, total=len(planned))
+    j = _jobs(l).submit("experiment-run", f"exp:{eid}:{batch or ''}",
+                        work)
+    return {"job": j["id"], "status": j["status"],
+            "planned": len(planned)}
 
 
 @app.get("/api/v1/runs")
@@ -1016,19 +1137,33 @@ class RegIn(BaseModel):
 
 @app.post("/api/v1/regressions", dependencies=[Depends(auth)])
 def regression_run(body: RegIn, l: Lab = Depends(lab)):
-    from skilllab.regression import run_regression
+    from skilllab.regression import run_regression, resolve_tasks
     if body.mode is not None and body.mode not in ("available", "injected"):
         raise HTTPException(400, "mode must be 'available' or 'injected'")
     try:
-        rid = run_regression(l, body.skill, body.baseline, body.candidate,
-                             body.tasks, model=body.model, mode=body.mode,
-                             rollouts=body.rollouts,
-                             overrides=body.thresholds or None)
+        l.skill(body.skill)
+        l.variant_dir(body.skill, body.baseline)
+        l.variant_dir(body.skill, body.candidate)
+        n_tasks = len(resolve_tasks(l, body.tasks))
     except LabError as e:
         raise HTTPException(409, str(e))
-    return {"id": rid,
-            "note": "synchronous — fine for mock; real models need "
-                    "the worker queue"}
+    n_roll = body.rollouts or int(l.cfg["rollouts_per_arm"])
+    planned = 2 * n_tasks * min(n_roll, int(l.cfg["rollouts_per_arm"])) \
+        if body.rollouts else 2 * n_tasks * n_roll
+
+    def work(job):
+        def progress(done, total):
+            job.progress(done / max(total, 1),
+                         f"rollout {done}/{total}")
+        return run_regression(
+            l, body.skill, body.baseline, body.candidate, body.tasks,
+            model=body.model, mode=body.mode, rollouts=body.rollouts,
+            overrides=body.thresholds or None, progress=progress,
+            should_stop=lambda: job.cancelled)
+
+    key = f"reg:{body.skill}:{body.baseline}:{body.candidate}:{body.tasks}"
+    j = _jobs(l).submit("regression-run", key, work)
+    return {"job": j["id"], "status": j["status"], "planned": planned}
 
 
 # ---------------- releases: create + lifecycle ----------------
@@ -1440,29 +1575,107 @@ def skill_graduation(sid: str, l: Lab = Depends(lab)):
 
 # ---------------- experiments: ops ----------------
 
+class IdIn(BaseModel):
+    id: str
+
+
 class ExpIn(BaseModel):
     id: str
     category: str = "trigger"
+    config: dict | None = None      # full Experiment Builder payload
 
 
 @app.post("/api/v1/experiments", dependencies=[Depends(auth)])
 def exp_new(body: ExpIn, l: Lab = Depends(lab)):
-    """Scaffold experiment.yaml (template — fill arms/tasks)."""
+    """Create an experiment — either a scaffold (id only) or a full
+    config from the Experiment Builder (`config` object)."""
     import datetime
     from skilllab.cli import EXP_TEMPLATE
-    from skilllab.models import ExpCategory
+    from skilllab.models import ExpCategory, Experiment
     if body.category not in ExpCategory.__args__:
         raise HTTPException(400, f"invalid category '{body.category}' — "
                             f"one of {list(ExpCategory.__args__)}")
+    check_id("experiment", body.id)
     d = l.experiments_dir / body.id
     if (d / "experiment.yaml").is_file():
         raise HTTPException(409, f"experiment '{body.id}' already exists")
     d.mkdir(parents=True, exist_ok=True)
+    if body.config:
+        try:
+            exp = Experiment(**{**body.config, "id": body.id})
+        except Exception as e:
+            raise HTTPException(400, f"invalid experiment config: {e}")
+        exp.save(d)
+        return {"path": str(d / "experiment.yaml"), "id": body.id}
     (d / "experiment.yaml").write_text(EXP_TEMPLATE.format(
         eid=body.id, model=l.cfg["model"],
         n=l.cfg["rollouts_per_arm"], cat=body.category,
         today=datetime.date.today().isoformat()))
-    return {"path": str(d / "experiment.yaml")}
+    return {"path": str(d / "experiment.yaml"), "id": body.id}
+
+
+@app.get("/api/v1/experiments/{eid}")
+def exp_get(eid: str, l: Lab = Depends(lab)):
+    """Full experiment config + run stats for the Builder detail view."""
+    from skilllab.report import load_runs
+    try:
+        exp = l.experiment(eid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    runs = load_runs(l, eid)
+    return {"experiment": exp.model_dump(mode="json"),
+            "n_runs": len(runs),
+            "n_evaluated": sum(1 for _, e in runs
+                               if e and e.status in ("passed", "failed"))}
+
+
+@app.put("/api/v1/experiments/{eid}/config", dependencies=[Depends(auth)])
+def exp_config(eid: str, body: dict, l: Lab = Depends(lab)):
+    """Replace experiment.yaml with the Builder's config. Pydantic +
+    domain validation run server-side; concluded experiments are
+    immutable. Returns the post-save validation result."""
+    from skilllab.engine import validate_experiment
+    from skilllab.models import Experiment
+    try:
+        cur = l.experiment(eid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    if cur.status == "concluded":
+        raise HTTPException(409, "concluded experiments are immutable")
+    try:
+        exp = Experiment(**{**body, "id": eid,
+                            "status": cur.status,
+                            "conclusion": cur.conclusion,
+                            "insights_generated":
+                                cur.insights_generated})
+    except Exception as e:
+        raise HTTPException(400, f"invalid experiment config: {e}")
+    exp.save(l.exp_dir(eid))
+    errors, warns = validate_experiment(l, exp)
+    return {"id": eid, "valid": not errors,
+            "errors": errors, "warnings": warns}
+
+
+@app.post("/api/v1/experiments/{eid}/duplicate",
+          dependencies=[Depends(auth)])
+def exp_duplicate(eid: str, body: IdIn, l: Lab = Depends(lab)):
+    """Copy an experiment's config to a new id (status resets to
+    designed; runs are never copied)."""
+    from skilllab.models import Experiment
+    try:
+        exp = l.experiment(eid)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    check_id("experiment", body.id)
+    d = l.experiments_dir / body.id
+    if (d / "experiment.yaml").is_file():
+        raise HTTPException(409, f"experiment '{body.id}' exists")
+    d.mkdir(parents=True, exist_ok=True)
+    data = exp.model_dump(mode="json")
+    data.update(id=body.id, status="designed", conclusion=None,
+                insights_generated=[])
+    Experiment(**data).save(d)
+    return {"id": body.id}
 
 
 @app.get("/api/v1/experiments/{eid}/validate")
@@ -1491,39 +1704,21 @@ def exp_runs(eid: str, l: Lab = Depends(lab)):
 
 def _exec_runs(l: Lab, eid: str, arm: str | None, limit: int | None,
                batch: str | None, model: str | None,
-               force: bool) -> dict:
-    """Shared run/rerun driver — mirrors `lab run`/`rerun`: validates
-    first, refuses concluded experiments and existing run ids (append-
-    only history), evaluates each completed rollout."""
-    import re
-    from skilllab.engine import (planned_run_ids, run_rollout,
-                                 validate_experiment)
+               force: bool, job=None, total: int | None = None) -> dict:
+    """Shared run/rerun driver — mirrors `lab run`/`rerun`. When `job`
+    is given (worker thread), each rollout logs progress + checks
+    cancellation; without it the call stays synchronous (CLI parity)."""
+    from skilllab.engine import run_rollout
     from skilllab.evaluate import evaluate_run
-    try:
-        exp = l.experiment(eid)
-    except LabError as e:
-        raise HTTPException(404, str(e))
-    if exp.status == "concluded":
-        raise HTTPException(409, f"experiment '{eid}' is concluded "
-                               "(immutable) — start a new experiment")
-    errors, warns = validate_experiment(l, exp)
-    if errors:
-        raise HTTPException(409, "experiment invalid: "
-                               + "; ".join(errors))
-    if model and model != exp.fixed.model and not batch:
-        batch = re.sub(r"[^a-z0-9-]+", "-", model.lower())[:40]
-    planned = planned_run_ids(exp, arm, limit, batch)
-    existing = [r for r in planned
-                if (l.runs_dir / r / "run.yaml").is_file()]
-    if existing and not force:
-        raise HTTPException(
-            409, f"{len(existing)}/{len(planned)} planned run(s) exist "
-                 f"(e.g. {existing[0]}) — use batch or force")
+    exp, batch, planned, warns = _preflight(
+        l, eid, arm, limit, batch, model, force)
     exp.status = "running"
     exp.save(l.exp_dir(exp.id))
     if model:
         exp.fixed.model = model  # in-memory only — after save (config kept)
     recs = []
+    total = total or len(planned)
+    done = 0
     for a in exp.arms:
         if arm and a.name != arm:
             continue
@@ -1531,6 +1726,9 @@ def _exec_runs(l: Lab, eid: str, arm: str | None, limit: int | None,
             n = min(limit, exp.rollouts_per_arm) if limit \
                 else exp.rollouts_per_arm
             for i in range(n):
+                if job:
+                    job.progress(done / max(total, 1),
+                                 f"{a.name}/{tid} r{i}")
                 rec = run_rollout(l, exp, a, tid, i, batch,
                                   overwrite=force)
                 try:
@@ -1539,10 +1737,13 @@ def _exec_runs(l: Lab, eid: str, arm: str | None, limit: int | None,
                 except Exception:
                     pass                # recorded, doesn't kill batch
                 recs.append(rec.run_id)
+                done += 1
+                if job:
+                    job.log(f"run {rec.run_id}")
+    if job:
+        job.progress(1.0, f"{done} rollouts")
     return {"runs": recs, "count": len(recs), "batch": batch,
-            "warnings": warns,
-            "note": "synchronous — fine for mock; real models need "
-                    "the worker queue"}
+            "warnings": warns}
 
 
 class RerunIn(BaseModel):
@@ -1555,10 +1756,19 @@ class RerunIn(BaseModel):
 
 @app.post("/api/v1/experiments/{eid}/rerun", dependencies=[Depends(auth)])
 def exp_rerun(eid: str, body: RerunIn, l: Lab = Depends(lab)):
-    """`lab rerun` — batch suffix keeps history append-only; --model
-    auto-batches for drift probes."""
-    return _exec_runs(l, eid, body.arm, body.limit, body.batch,
-                      body.model, body.force)
+    """`lab rerun` as a background job — batch suffix keeps history
+    append-only; --model auto-batches for drift probes."""
+    exp, batch, planned, _ = _preflight(
+        l, eid, body.arm, body.limit, body.batch, body.model,
+        body.force)
+
+    def work(job):
+        _exec_runs(l, eid, body.arm, body.limit, batch, body.model,
+                   body.force, job=job, total=len(planned))
+    j = _jobs(l).submit("experiment-run",
+                        f"exp:{eid}:{batch or body.arm or ''}", work)
+    return {"job": j["id"], "status": j["status"],
+            "planned": len(planned), "batch": batch}
 
 
 class ConcludeIn(BaseModel):
@@ -1690,10 +1900,6 @@ def lab_status(l: Lab = Depends(lab)):
             "judge_model": l.cfg["judge_model"],
             "sandbox": l.cfg.get("sandbox"), "counts": counts,
             "runs": n_runs, "warnings": warns}
-
-
-class IdIn(BaseModel):
-    id: str
 
 
 @app.get("/api/v1/tasks")

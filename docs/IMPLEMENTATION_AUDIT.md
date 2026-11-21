@@ -56,3 +56,21 @@ verified (tests listed); see commits `e4dcab1`, `c2c7790`.
 - Job queue: only deep-research wired so far; experiment/regression
   runs still spawn threads
 - TypeScript migration; annotations UI; PDF reading; Monaco editor
+
+## 2025-06 update — Stage 3-5 (Editor/Builder/Jobs)
+
+- `src/api.js` shared client extracted (token + api()).
+- `features/skills/SkillEditor.jsx` — 3-pane workspace: file tree,
+  text editor (base_sha optimistic concurrency, 409 conflict UI),
+  revision history + restore, delete w/ snapshot, validate panel.
+- `features/experiments/ExperimentBuilder.jsx` — structured forms for
+  experiment.yaml (general/model/arms/tasks), server-side validate on
+  save+run, concluded=read-only, job progress w/ live logs.
+- `web/backend/jobs.py` — bounded ThreadPoolExecutor, WAL+busy_timeout,
+  crash recovery marks 'interrupted' (honest, no fake resume),
+  cooperative timeout, cancel observable via checkpoint; schema
+  migration adds timeout_s/cancel to legacy jobs.sqlite.
+- Experiment run/rerun + regression run now return {job,status,planned};
+  execution inside workers with real progress (done/total) + logs.
+- run_regression gained progress/should_stop hooks; cancelled batch
+  leaves experiment 'running' (resumable via rerun), never faked done.

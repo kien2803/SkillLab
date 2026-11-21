@@ -1,17 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 
-const TOKEN_KEY = "skilllab_token";
-const tok = () => localStorage.getItem(TOKEN_KEY) || "";
-const api = (p, opts = {}) =>
-  fetch("/api/v1" + p, {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${tok()}`,
-      ...(opts.headers || {}),
-    },
-  }).then((r) => (r.ok ? r.json() : r.json().then((e) => Promise.reject(e.detail || r.status))));
+import { TOKEN_KEY, tok, api } from "./api.js";
+import { SkillEditor } from "./features/skills/SkillEditor.jsx";
+import { ExperimentBuilder } from
+  "./features/experiments/ExperimentBuilder.jsx";
 
 /* ---------- icons (17px outline, stroke currentColor) ---------- */
 const ic = (d) => (
@@ -443,6 +436,7 @@ function Skills() {
   const [msg, setMsg] = useState("");
   const [newSk, setNewSk] = useState("");
   const [imp, setImp] = useState("");
+  const [editing, setEditing] = useState(null); // "skill@variant"
   const load = () => api("/skills").then(setList).catch(() => {});
   useEffect(load, []);
   const show = (kind, p) =>
@@ -462,6 +456,10 @@ function Skills() {
       .then((d) => setMsg(`resource → ${d.path}`))
       .catch((e) => setMsg(String(e)));
   };
+  if (editing)
+    return <Page title="Skill Studio" sub="editor">
+      <SkillEditor skillRef={editing}
+        onClose={() => { setEditing(null); load(); }} /></Page>;
   return <Page title="Skill Studio" sub="registry, variants, lint">
     <Msg m={msg} />
     <div className="card">
@@ -500,6 +498,8 @@ function Skills() {
                 api(`/skills/${s.id}@${v.id}/preview`)
                   .then((d) => { setPv(d); setPanel(null); })}>
                 {v.id}</a>
+              {" "}[<a href="#" onClick={() =>
+                setEditing(`${s.id}@${v.id}`)}>edit</a>]
               {" "}[<a href="#" onClick={() =>
                 show("check", api(`/skills/${s.id}@${v.id}/check`))}>
                 check</a>]
@@ -849,7 +849,8 @@ function Regressions() {
     if (form.mode) body.mode = form.mode;
     if (form.rollouts) body.rollouts = parseInt(form.rollouts, 10);
     api("/regressions", { method: "POST", body: JSON.stringify(body) })
-      .then((r) => { setMsg(`regression '${r.id}' complete`); load(); })
+      .then((r) => { setMsg(`job ${r.job} — ` +
+        `${r.planned} rollouts queued`); load(); })
       .catch((e) => setMsg(String(e)));
   };
   const variants = (skills.find((s) => s.id === form.skill) || {})
@@ -947,6 +948,7 @@ function Experiments() {
   const [panel, setPanel] = useState({});
   const [aux, setAux] = useState({ batch: "", model: "", limit: "",
     conclusion: "", a: "", b: "", newExp: "", newCat: "trigger" });
+  const [editing, setEditing] = useState(null);   // experiment id
   const load = () => {
     api("/experiments").then(setList).catch(() => {});
     api("/runs").then(setRuns).catch(() => {});
@@ -954,7 +956,8 @@ function Experiments() {
   useEffect(load, []);
   const run = (id) =>
     api(`/experiments/${id}/run`, { method: "POST" })
-      .then((r) => { setMsg(`${id}: ${r.count} runs`); load(); })
+      .then((r) => { setMsg(`${id}: job ${r.job} — ` +
+        `${r.planned} rollouts`); load(); })
       .catch((e) => setMsg(String(e)));
   const rerun = (id) => {
     const body = {};
@@ -963,8 +966,8 @@ function Experiments() {
     if (aux.limit) body.limit = parseInt(aux.limit, 10);
     api(`/experiments/${id}/rerun`, { method: "POST",
       body: JSON.stringify(body) })
-      .then((r) => { setMsg(`${id}: ${r.count} runs (batch
-        ${r.batch || "\u2014"})`); load(); })
+      .then((r) => { setMsg(`${id}: job ${r.job} — ` +
+        `${r.planned} rollouts (batch ${r.batch || "\u2014"})`); load(); })
       .catch((e) => setMsg(String(e)));
   };
   const compare = (id) =>
@@ -1000,6 +1003,9 @@ function Experiments() {
     "tool-use","compatibility","reliability","efficiency"];
   return <Page title="Experiment Lab"
     sub="arms × tasks, evidence over vibes">
+    {editing && <ExperimentBuilder eid={editing}
+      onClose={() => setEditing(null)}
+      onRan={() => { setEditing(null); load(); }} />}
     <Msg m={msg} />
     <div className="toolbar">
       <input {...ax("newExp")} placeholder="new experiment id" />
@@ -1038,7 +1044,9 @@ function Experiments() {
         · rollouts: {e.rollouts_per_arm}
         · model: {e.fixed ? e.fixed.model : "?"}</div>
       <div className="toolbar">
-        <button className="primary" onClick={() => run(e.id)}>Run</button>
+        <button className="primary" onClick={() =>
+          setEditing(e.id)}>Builder</button>
+        <button onClick={() => run(e.id)}>Run</button>
         <button onClick={() => compare(e.id)}>Compare</button>
         <button onClick={() => report(e.id)}>Report</button>
         <button onClick={() => show(e.id, "validate",

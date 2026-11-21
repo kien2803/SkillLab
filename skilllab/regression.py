@@ -99,11 +99,15 @@ def _new_reg_id(lab: Lab, skill_id: str, baseline: str,
 def run_regression(lab: Lab, skill_id: str, baseline: str, candidate: str,
                    tasks_spec: str, model: str | None = None,
                    mode: str | None = None, rollouts: int | None = None,
-                   overrides: dict | None = None) -> str:
+                   overrides: dict | None = None,
+                   progress=None, should_stop=None) -> str:
     """Validate, execute and analyze a baseline-vs-candidate comparison.
 
     Returns the regression id. Both arms run under the same experiment
     (same fixed config -> experimental equivalence by construction).
+    `progress(done, total)` is invoked after each rollout;
+    `should_stop()` returning True aborts the batch cleanly (the
+    experiment is left 'running' — resumable via rerun).
     """
     lab.skill(skill_id)  # raises when the skill is not registered
     if baseline == candidate:
@@ -159,10 +163,17 @@ def run_regression(lab: Lab, skill_id: str, baseline: str, candidate: str,
 
     n = min(rollouts, exp.rollouts_per_arm) if rollouts \
         else exp.rollouts_per_arm
+    total = len(exp.arms) * len(task_ids) * n
+    done = 0
     for arm in exp.arms:
         for tid in task_ids:
             for i in range(n):
+                if should_stop is not None and should_stop():
+                    return reg_id
                 rec = run_rollout(lab, exp, arm, tid, i)
+                done += 1
+                if progress is not None:
+                    progress(done, total)
                 try:
                     evaluate_run(lab, rec, lab.task(tid),
                                  lab.runs_dir / rec.run_id)

@@ -65,11 +65,24 @@ class Jobs:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA busy_timeout=30000")
         self._db.executescript(_SCHEMA)
+        self._migrate()
         self._lock = threading.Lock()
         self._pool = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="skilllab-job")
         self._cancel: dict[str, threading.Event] = {}
         self._recover()
+
+    def _migrate(self) -> None:
+        """Bring an older jobs.db forward without losing history —
+        ALTER add new columns; never drop the table."""
+        cols = {r[1] for r in
+                self._db.execute("PRAGMA table_info(jobs)")}
+        for col, ddl in (("timeout_s", "REAL"),
+                         ("cancel", "INTEGER DEFAULT 0")):
+            if col not in cols:
+                self._db.execute(
+                    f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
+        self._db.commit()
 
     # ---------- recovery ----------
     def _recover(self) -> None:
