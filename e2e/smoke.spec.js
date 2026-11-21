@@ -19,10 +19,15 @@ test("skills page shows registry", async ({ page }) => {
   await expect(page.getByText("commit-helper").first()).toBeVisible();
 });
 
-test("auth gate: write without token is rejected", async ({ page }) => {
-  const r = await page.request.post("/api/v1/projects",
+test("auth gate: write without token is rejected", async ({ playwright }) => {
+  // anonymous context — no Authorization header, no localStorage
+  const anon = await playwright.request.newContext(
+    { baseURL: "http://localhost:8320",
+      extraHTTPHeaders: {} });   // override inherited bearer header
+  const r = await anon.post("/api/v1/projects",
     { data: { id: "e2e-x" } });
   expect(r.status()).toBe(401);
+  await anon.dispose();
 });
 
 const RUN = "exp-trigger-wording--good-desc--write-commit-msg--r0";
@@ -79,7 +84,10 @@ test("release detail carries computed checklist", async ({ page }) => {
   expect(j.checklist.every((c) => c.ok)).toBeTruthy();
 });
 
-test("write gates on lifecycle endpoints", async ({ page }) => {
+test("write gates on lifecycle endpoints", async ({ playwright }) => {
+  const anon = await playwright.request.newContext(
+    { baseURL: "http://localhost:8320",
+      extraHTTPHeaders: {} });   // override inherited bearer header
   for (const [method, url, data] of [
     ["post", "/api/v1/insights", { title: "x" }],
     ["post", "/api/v1/regressions",
@@ -105,9 +113,10 @@ test("write gates on lifecycle endpoints", async ({ page }) => {
     ["post", "/api/v1/tasks", { id: "t" }],
     ["post", "/api/v1/rubrics", { id: "r" }],
   ]) {
-    const r = await page.request[method](url, { data });
+    const r = await anon[method](url, { data });
     expect(r.status()).toBe(401);
   }
+  await anon.dispose();
 });
 
 test("project detail exposes all entity kinds", async ({ page }) => {
