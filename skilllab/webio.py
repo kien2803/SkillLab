@@ -232,6 +232,14 @@ def extract_doc(path: str) -> str:
             from pypdf import PdfReader
         except ImportError:
             raise LabError("PDF needs pypdf — pip install pypdf")
-        return "\n".join(pg.extract_text() or ""
-                         for pg in PdfReader(p).pages)
+        try:
+            reader = PdfReader(p)
+            text = "\n".join(
+                pg.extract_text() or "" for pg in reader.pages).strip()
+        except Exception as e:
+            raise LabError(f"unreadable PDF: {type(e).__name__}: {e}")
+        if not text:
+            raise LabError("PDF yielded no extractable text "
+                           "(empty or image-only document)")
+        return text
     raise LabError(f"unsupported document type: {low.rsplit('.',1)[-1]}")

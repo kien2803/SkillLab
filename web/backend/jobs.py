@@ -1,11 +1,24 @@
-"""Persistent background jobs — SQLite store + thread runner.
+"""Persistent background jobs — SQLite store + bounded thread pool.
 
-Job lifecycle: queued -> running -> completed | failed | cancelled.
-State survives restarts; lab artifacts stay on the filesystem (jobs
-only hold metadata + logs, never duplicate domain data).
+Lifecycle: queued -> running -> completed | failed | cancelled |
+interrupted | timeout. State survives restarts; lab artifacts stay on
+the filesystem — jobs hold metadata + logs only, never domain data.
 
-Concurrency: one active job per `key` (e.g. a research run or an
-experiment) — re-submitting while one runs returns the existing job.
+Recovery policy (honest, per spec): a worker thread cannot outlive its
+process, so on startup every job still 'queued'/'running' is marked
+'interrupted' — never silently completed. Resumable kinds
+(deep-research) pick up where their domain state left off when the
+caller submits a fresh job; there is no transparent resume of a dead
+callable.
+
+Concurrency: ThreadPoolExecutor(max_workers). A job `key` may have at
+most one active job — enforced by a partial UNIQUE index, so duplicate
+submission races return the existing job rather than spawning a second.
+
+Timeouts are cooperative: an expired job's cancel event is set and its
+status becomes 'timeout'; the worker observes it at the next
+log()/progress()/cancelled checkpoint and aborts (Python threads
+cannot be force-killed safely).
 """
 from __future__ import annotations
 
@@ -14,6 +27,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 _SCHEMA = """
@@ -21,29 +35,60 @@ CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
   key TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'queued',
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK(status IN ('queued','running','completed','failed',
+                     'cancelled','interrupted','timeout')),
   progress REAL DEFAULT 0,
   operation TEXT DEFAULT '',
   logs TEXT DEFAULT '[]',
   error TEXT,
+  timeout_s REAL,
   created REAL, started REAL, finished REAL,
   cancel INTEGER DEFAULT 0);
 CREATE INDEX IF NOT EXISTS jobs_key ON jobs(key, status);
+-- at most one active job per key, enforced atomically
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_key
+  ON jobs(key) WHERE status IN ('queued','running');
 """
+
+_ACTIVE = ("queued", "running")
+DEFAULT_TIMEOUT = 3600.0
+MAX_WORKERS = 4
+_LOG_CAP = 200
 
 
 class Jobs:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, max_workers: int = MAX_WORKERS):
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(str(db_path), check_same_thread=False)
+        self._db = sqlite3.connect(str(db_path), check_same_thread=False,
+                                   timeout=30)
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("PRAGMA busy_timeout=30000")
         self._db.executescript(_SCHEMA)
         self._lock = threading.Lock()
-        self._cancel = {}                     # job_id -> threading.Event
+        self._pool = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="skilllab-job")
+        self._cancel: dict[str, threading.Event] = {}
+        self._recover()
+
+    # ---------- recovery ----------
+    def _recover(self) -> None:
+        """Crash/restart: workers died with the process. Mark every
+        still-active job 'interrupted' — honest, resumable kinds are
+        re-submitted by their callers."""
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE jobs SET status='interrupted', finished=?, "
+                "error=COALESCE(error,'worker process died') "
+                "WHERE status IN ('queued','running')",
+                (time.time(),))
 
     # ---------- lifecycle ----------
-    def submit(self, kind: str, key: str, fn) -> dict:
-        """Enqueue `fn(job)` on a daemon thread. `key` dedupes — a
-        running/queued job for the same key is returned instead."""
+    def submit(self, kind: str, key: str, fn,
+               timeout_s: float = DEFAULT_TIMEOUT) -> dict:
+        """Enqueue `fn(job_handle)`; returns the existing active job for
+        `key` when one exists (the UNIQUE index makes this atomic —
+        a losing insert race returns the winner's job)."""
         with self._lock:
             row = self._db.execute(
                 "SELECT id FROM jobs WHERE key=? AND status IN "
@@ -51,33 +96,52 @@ class Jobs:
             if row:
                 return self.get(row[0])
             jid = f"job-{uuid.uuid4().hex[:10]}"
-            self._db.execute(
-                "INSERT INTO jobs (id,kind,key,status,created) "
-                "VALUES (?,?,?,'queued',?)",
-                (jid, kind, key, time.time()))
-            self._db.commit()
+            try:
+                with self._db:
+                    self._db.execute(
+                        "INSERT INTO jobs (id,kind,key,status,created,"
+                        "timeout_s) VALUES (?,?,?,'queued',?,?)",
+                        (jid, kind, key, time.time(), timeout_s))
+            except sqlite3.IntegrityError:
+                # concurrent submit won the key — return their job
+                row = self._db.execute(
+                    "SELECT id FROM jobs WHERE key=? AND status IN "
+                    "('queued','running')", (key,)).fetchone()
+                return self.get(row[0]) if row else {}
             ev = threading.Event()
             self._cancel[jid] = ev
-        threading.Thread(target=self._run, args=(jid, fn, ev),
-                         daemon=True).start()
+        self._pool.submit(self._run, jid, fn, ev)
         return self.get(jid)
 
     def _run(self, jid: str, fn, ev: threading.Event) -> None:
-        self._update(jid, status="running", started=time.time())
+        if not self._transition(jid, "queued", "running",
+                                started=time.time()):
+            return                             # cancelled while queued
         job = _Handle(self, jid, ev)
+        deadline = time.monotonic() + (self.get(jid).get("timeout_s")
+                                       or DEFAULT_TIMEOUT)
         try:
             fn(job)
+            if job.cancelled:
+                self._finish(jid, "cancelled")
+            elif time.monotonic() > deadline:
+                self._finish(jid, "timeout",
+                             error="job exceeded its timeout")
+            else:
+                self._finish(jid, "completed", progress=1.0)
         except _Cancelled:
-            self._update(jid, status="cancelled",
-                         finished=time.time())
-        except Exception as e:  # noqa: BLE001 - record, never crash worker
-            self._update(jid, status="failed", error=str(e),
-                         finished=time.time())
-        else:
-            self._update(jid, status="completed", progress=1.0,
-                         finished=time.time())
+            pass                               # status already terminal
+        except TimeoutError:
+            self._finish(jid, "timeout", error="job exceeded its timeout")
+        except Exception as e:  # noqa: BLE001 - record, never crash pool
+            self._finish(jid, "failed",
+                         error=f"{type(e).__name__}: {e}")
         finally:
             self._cancel.pop(jid, None)
+
+    def _finish(self, jid: str, status: str, **kv) -> None:
+        kv.setdefault("finished", time.time())
+        self._update_if_active(jid, status, **kv)
 
     # ---------- accessors ----------
     def get(self, jid: str) -> dict:
@@ -92,42 +156,80 @@ class Jobs:
         return [self._row(r) for r in rows]
 
     def cancel(self, jid: str) -> dict:
+        j = self.get(jid)
+        if not j or j["status"] not in _ACTIVE:
+            return j
         ev = self._cancel.get(jid)
         if ev:
-            ev.set()
-        self._db.execute(
-            "UPDATE jobs SET cancel=1 WHERE id=? AND status IN "
-            "('queued','running')", (jid,))
-        self._db.commit()
-        j = self.get(jid)
-        if j.get("status") == "queued":
-            self._update(jid, status="cancelled", finished=time.time())
-            j = self.get(jid)
-        return j
+            ev.set()                           # running: cooperative
+        if j["status"] == "queued":
+            # may still flip to running concurrently — the worker checks
+            self._db.execute(
+                "UPDATE jobs SET status='cancelled', finished=? "
+                "WHERE id=? AND status='queued'",
+                (time.time(), jid))
+            self._db.commit()
+        else:
+            self._db.execute(
+                "UPDATE jobs SET cancel=1 WHERE id=?", (jid,))
+            self._db.commit()
+        return self.get(jid)
 
     # ---------- internals ----------
-    def _update(self, jid: str, **kv) -> None:
-        with self._lock:
-            sets = ", ".join(f"{k}=?" for k in kv)
-            self._db.execute(f"UPDATE jobs SET {sets} WHERE id=?",
-                             (*kv.values(), jid))
-            self._db.commit()
+    def _transition(self, jid: str, frm: str, to: str, **kv) -> bool:
+        sets = ", ".join(f"{k}=?" for k in ("status", *kv))
+        with self._lock, self._db:
+            cur = self._db.execute(
+                f"UPDATE jobs SET {sets} WHERE id=? AND status=?",
+                (to, *kv.values(), jid, frm))
+            return cur.rowcount == 1
+
+    def _update_if_active(self, jid: str, status: str, **kv) -> None:
+        sets = ", ".join(f"{k}=?" for k in ("status", *kv))
+        with self._lock, self._db:
+            self._db.execute(
+                f"UPDATE jobs SET {sets} WHERE id=? AND status IN "
+                "('queued','running')", (status, *kv.values(), jid))
+
+    def _checkpoint(self, jid: str, ev: threading.Event) -> None:
+        """Raise _Cancelled when the job was cancelled or timed out
+        (checked against both the event and the db flag — cancel() also
+        works if the event map entry is gone)."""
+        if ev.is_set():
+            raise _Cancelled()
+        row = self._db.execute(
+            "SELECT status, cancel, timeout_s, started FROM jobs "
+            "WHERE id=?", (jid,)).fetchone()
+        if row is None:
+            raise _Cancelled()
+        status, cancel, tmo, started = row
+        if status in ("cancelled", "failed", "completed",
+                      "interrupted", "timeout"):
+            raise _Cancelled()
+        if cancel:
+            self._finish(jid, "cancelled")
+            ev.set()
+            raise _Cancelled()
+        if tmo and started and \
+                time.time() - started > tmo:
+            self._finish(jid, "timeout", error="job exceeded its timeout")
+            ev.set()
+            raise _Cancelled()
 
     def _log(self, jid: str, line: str) -> None:
-        with self._lock:
+        with self._lock, self._db:
             logs = json.loads(self._db.execute(
                 "SELECT logs FROM jobs WHERE id=?", (jid,)
             ).fetchone()[0])
             logs.append(line[:500])
             self._db.execute("UPDATE jobs SET logs=? WHERE id=?",
-                             (json.dumps(logs[-200:]), jid))
-            self._db.commit()
+                             (json.dumps(logs[-_LOG_CAP:]), jid))
 
     @staticmethod
     def _row(r) -> dict:
         keys = ("id", "kind", "key", "status", "progress", "operation",
-                "logs", "error", "created", "started", "finished",
-                "cancel")
+                "logs", "error", "timeout_s", "created", "started",
+                "finished", "cancel")
         d = dict(zip(keys, r))
         d["logs"] = json.loads(d["logs"] or "[]")
         return d
@@ -138,21 +240,21 @@ class _Cancelled(Exception):
 
 
 class _Handle:
-    """Passed to job functions: progress/log/cancel surface."""
+    """Passed to job functions: progress/log/cancel surface. Every
+    method is also a cancellation checkpoint."""
 
     def __init__(self, store: Jobs, jid: str, ev: threading.Event):
         self._s, self.id, self._ev = store, jid, ev
 
     def progress(self, frac: float, operation: str = "") -> None:
-        self._s._update(self.id, progress=min(max(frac, 0), 1),
-                        operation=operation[:200])
-        if self._ev.is_set():
-            raise _Cancelled()
+        self._s._update_if_active(
+            self.id, "running", progress=min(max(frac, 0), 1),
+            operation=operation[:200])
+        self._s._checkpoint(self.id, self._ev)
 
     def log(self, line: str) -> None:
         self._s._log(self.id, line)
-        if self._ev.is_set():
-            raise _Cancelled()
+        self._s._checkpoint(self.id, self._ev)
 
     @property
     def cancelled(self) -> bool:

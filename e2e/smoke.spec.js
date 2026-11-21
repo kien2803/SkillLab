@@ -1,4 +1,7 @@
 import { test, expect } from "@playwright/test";
+import { authed } from "./auth.js";
+
+authed();
 
 test("overview renders real lab stats", async ({ page }) => {
   await page.goto("/");

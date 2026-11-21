@@ -27,6 +27,11 @@ class GraduationReport:
     skill_id: str
     n_runs: int = 0                     # usable runs (non-error)
     n_total: int = 0                    # all runs incl. infra failures
+    # sample accounting: what each run could/couldn't prove
+    n_evaluated: int = 0                # evals in a terminal state
+    n_activation: int = 0               # available-mode runs on act tasks
+    n_performance: int = 0              # scored runs on perf tasks
+    exclusions: dict[str, int] = field(default_factory=dict)
     activation_rate: float | None = None
     false_activation_rate: float | None = None
     task_deltas: dict[str, float] = field(default_factory=dict)
@@ -62,12 +67,17 @@ def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
         if ref == skill_id or ref.startswith(skill_id + "@"):
             n_total += 1
             if rec.status == "error":
+                rep.exclusions["infra-error"] = \
+                    rep.exclusions.get("infra-error", 0) + 1
                 continue   # infra failure ≠ quality evidence
             skill_runs.append((rec, ev))
         elif rec.status != "error":
             ctrl_runs.append((rec, ev))
     rep.n_runs = len(skill_runs)
     rep.n_total = n_total
+    rep.n_evaluated = sum(
+        1 for _, ev in skill_runs
+        if ev is not None and ev.status in ("passed", "failed"))
 
     act, false_act = [], []
     # skill scores grouped by equivalence key: (exp, model, mode, temp)
@@ -84,6 +94,8 @@ def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
         try:
             task = lab.task(rec.task)
         except LabError:
+            rep.exclusions["task-deleted"] = \
+                rep.exclusions.get("task-deleted", 0) + 1
             continue   # task left the bank — run isn't usable evidence
         activated = {e.skill for e in rec.skill_events
                      if e.event == "activated"}
@@ -93,8 +105,12 @@ def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
             if task.kind == "performance":
                 s = score_of(ev)
                 if s is not None:
+                    rep.n_performance += 1
                     skill_scores.setdefault(_run_cfg(rec), {}) \
                         .setdefault(rec.task, []).append(s)
+                else:
+                    rep.exclusions["eval-incomplete"] = \
+                        rep.exclusions.get("eval-incomplete", 0) + 1
             continue
         ref_slot = rep.by_ref.setdefault(rec.skill_ref or "?",
                                          {"act": [], "false": []})
@@ -102,17 +118,23 @@ def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
             v = 1.0 if task.skill_relevance.expected and any(
                 s in activated for s in task.skill_relevance.expected) else 0.0
             act.append(v)
+            rep.n_activation += 1
             ref_slot["act"].append(v)
         elif task.kind == "activation-negative":
             v = 1.0 if any(s in activated for s in
                            task.skill_relevance.unexpected) else 0.0
             false_act.append(v)
+            rep.n_activation += 1
             ref_slot["false"].append(v)
         elif task.kind == "performance":
             s = score_of(ev)
             if s is not None:
+                rep.n_performance += 1
                 skill_scores.setdefault(_run_cfg(rec), {}) \
                     .setdefault(rec.task, []).append(s)
+            else:
+                rep.exclusions["eval-incomplete"] = \
+                    rep.exclusions.get("eval-incomplete", 0) + 1
 
     # pool control runs ONLY inside the same equivalence cell —
     # a control from a different experiment/model/mode is not evidence
@@ -147,10 +169,14 @@ def evaluate_skill(lab: Lab, skill_id: str) -> GraduationReport:
         rep.task_deltas[tid] = statistics.mean(ds)
 
     ar, far = rep.activation_rate, rep.false_activation_rate
+    excl = (", excluded: " + ", ".join(f"{k}={v}" for k, v in
+            rep.exclusions.items())) if rep.exclusions else ""
     rep.verdicts = [
         ("sample size", rep.n_runs >= 9,
-         f"{rep.n_runs} usable runs (of {rep.n_total} recorded; "
-         "want >=9: 3 rollouts x 3 tasks)"),
+         f"{rep.n_runs} usable of {rep.n_total} recorded "
+         f"({rep.n_evaluated} evaluated, {rep.n_activation} activation-"
+         f"eligible, {rep.n_performance} performance-scored"
+         f"{excl}; want >=9: 3 rollouts x 3 tasks)"),
         ("activation",
          ar >= cfg["activation_rate"] if ar is not None else None,
          f"{ar:.0%} >= {cfg['activation_rate']:.0%}"

@@ -76,18 +76,10 @@ def list_releases(lab: Lab, skill_id: str | None = None) -> list[Release]:
 
 
 def variant_hash(lab: Lab, skill_id: str, variant_id: str) -> str:
-    """Content hash of the variant: sha256 over sorted (relpath, bytes)
-    pairs — any file add/edit/delete changes it."""
-    import hashlib
-    vdir = lab.variant_dir(skill_id, variant_id)
-    h = hashlib.sha256()
-    for p in sorted(vdir.rglob("*")):
-        if p.is_file() and not p.is_symlink():
-            h.update(str(p.relative_to(vdir)).encode())
-            h.update(b"\0")
-            h.update(p.read_bytes())
-            h.update(b"\0")
-    return h.hexdigest()[:20]
+    """Content hash of the variant — delegates to the canonical
+    `dir_hash` so release checks compare exactly what runs recorded."""
+    from .models import dir_hash
+    return dir_hash(lab.variant_dir(skill_id, variant_id))
 
 
 DEFAULT_RELEASE_GATES = {
@@ -102,9 +94,31 @@ DEFAULT_RELEASE_GATES = {
 }
 
 
+def _validate_gates(raw: dict) -> dict:
+    """Merge lab.yaml `release:` over defaults with type/range checks —
+    a typo must never silently weaken a gate."""
+    g = dict(DEFAULT_RELEASE_GATES)
+    for k, v in (raw or {}).items():
+        if k not in g:
+            raise LabError(f"unknown release gate '{k}' in lab.yaml")
+        if k in ("min_evaluated", "min_passed"):
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                raise LabError(f"release gate '{k}' must be an int >= 0")
+        elif k == "regression_clean":
+            if not isinstance(v, bool):
+                raise LabError(f"release gate '{k}' must be true/false")
+        else:  # rate gates
+            if v is not None and (not isinstance(v, (int, float))
+                                  or isinstance(v, bool)
+                                  or not 0.0 <= float(v) <= 1.0):
+                raise LabError(f"release gate '{k}' must be 0..1 or null")
+        g[k] = v
+    return g
+
+
 def checklist(lab: Lab, skill_id: str, version: str) -> list[dict]:
     r, _ = _load(lab, skill_id, version)
-    gates = {**DEFAULT_RELEASE_GATES, **(lab.cfg.get("release") or {})}
+    gates = _validate_gates(lab.cfg.get("release"))
     checks = []
     meta = lab.skill(skill_id)
     vid = r.variant or next((v.id for v in meta.variants), "")
@@ -119,9 +133,16 @@ def checklist(lab: Lab, skill_id: str, version: str) -> list[dict]:
         "detail": (f"{len(errs)} error findings" if errs
                    else "no error findings")})
 
-    # 2. evaluated evidence on THIS variant+content hash
-    evaluated = passed = 0
-    cur_hash = None
+    # 2. evaluated evidence on THIS variant AND this exact content —
+    #    a run counts only when its recorded skill_hash matches the
+    #    hash being released. Legacy runs without a hash can't prove
+    #    they tested this content; runs on other content are neutral.
+    try:
+        cur_hash = variant_hash(lab, skill_id, vid)
+    except LabError:
+        cur_hash = None
+    target_hash = r.variant_hash or cur_hash
+    evaluated = passed = legacy = other_content = 0
     for rd in lab.runs_dir.iterdir() if lab.runs_dir.is_dir() else []:
         ry = rd / "run.yaml"
         ey = rd / "eval.yaml"
@@ -133,6 +154,13 @@ def checklist(lab: Lab, skill_id: str, version: str) -> list[dict]:
             continue
         if rr.get("status") == "error":
             continue                       # infra failure ≠ evidence
+        rh = rr.get("skill_hash")
+        if not rh:
+            legacy += 1                    # pre-hash run: unverifiable
+            continue
+        if target_hash and rh != target_hash:
+            other_content += 1             # tested different bytes
+            continue
         ev = load_yaml(ey)
         if ev.get("status") in ("passed", "failed"):
             evaluated += 1
@@ -142,13 +170,20 @@ def checklist(lab: Lab, skill_id: str, version: str) -> list[dict]:
         "id": "evaluated-evidence", "required": True,
         "ok": evaluated >= gates["min_evaluated"],
         "detail": f"{evaluated} evaluated run(s) on {skill_id}@{vid} "
-                  f"(need >= {gates['min_evaluated']})"})
+                  f"@exact-content (need >= {gates['min_evaluated']})"})
     checks.append({
         "id": "passed-evidence", "required": True,
         "ok": passed >= gates["min_passed"],
         "detail": f"{passed} passing eval(s) (need >= "
                   f"{gates['min_passed']}; failed evals are evidence of "
                   "a problem, not of quality)"})
+    if legacy or other_content:
+        checks.append({
+            "id": "unverifiable-evidence", "required": False,
+            "ok": True,
+            "detail": f"{legacy} run(s) predate content hashing and "
+                      f"{other_content} ran on different content — "
+                      "neither counts as exact-version evidence"})
     if gates["min_success_rate"] is not None and evaluated:
         rate = passed / evaluated
         checks.append({
@@ -159,10 +194,6 @@ def checklist(lab: Lab, skill_id: str, version: str) -> list[dict]:
 
     # 3. content-hash consistency — release must point at the exact
     #    content that passed validation
-    try:
-        cur_hash = variant_hash(lab, skill_id, vid)
-    except LabError:
-        cur_hash = None
     if r.variant_hash:
         checks.append({
             "id": "content-hash", "required": True,

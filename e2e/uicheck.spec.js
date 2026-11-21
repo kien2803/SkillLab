@@ -1,4 +1,7 @@
 import { test, expect } from "@playwright/test";
+import { authed } from "./auth.js";
+
+authed();
 
 const errors = [];
 test.beforeEach(({ page }) => {

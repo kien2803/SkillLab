@@ -35,13 +35,22 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def dir_hash(path: Path) -> str:
-    """Content hash over all files under a directory."""
+    """Canonical content hash over all files under a directory:
+    sha256 of sorted (relpath \\0 bytes \\0) pairs — file adds, edits,
+    deletes and renames all change it. Symlinks are never followed.
+
+    THE canonical implementation — used by run provenance
+    (RunRecord.skill_hash), release validation and the release
+    checklist so that 'the content a run tested' and 'the content a
+    release ships' compare byte-identically."""
     h = hashlib.sha256()
     for p in sorted(path.rglob("*")):
-        if p.is_file():
+        if p.is_file() and not p.is_symlink():
             h.update(str(p.relative_to(path)).encode())
+            h.update(b"\0")
             h.update(p.read_bytes())
-    return "sha256:" + h.hexdigest()[:16]
+            h.update(b"\0")
+    return "sha256:" + h.hexdigest()[:20]
 
 
 def est_tokens(text: str) -> int:

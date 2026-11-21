@@ -14,6 +14,7 @@ web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",   # UploadFile/form parsing
+    "pypdf>=4.0",                # PDF source uploads
 ]
 dev = [
     "pytest>=8.0",

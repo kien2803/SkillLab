@@ -1373,10 +1373,12 @@ def test_release_gate_and_trace(lab):
                  "--variant", "v1"]) == 0
     assert main(["release", "status", "rel-skill", "1.0.0",
                  "released"]) == 1
-    # add an evaluated run for this variant
+    # add an evaluated run for this variant — pinned to the exact
+    # content hash it claims to have tested
     from skilllab.models import dump_yaml
     d = _mkrun(lab, "r-rel")
     ry = load_yaml(d / "run.yaml"); ry["skill_ref"] = "rel-skill@v1"
+    ry["skill_hash"] = release.variant_hash(lab, "rel-skill", "v1")
     dump_yaml(ry, d / "run.yaml")
     dump_yaml({"checks": [{"id": "x", "method": "deterministic",
                            "status": "passed"}],
