@@ -835,7 +835,8 @@ function RegressionsBody() {
   const [det, setDet] = useState(null);
   const [msg, setMsg] = useState("");
   const [form, setForm] = useState({ skill: "", baseline: "",
-    candidate: "", tasks: "default", mode: "", rollouts: "" });
+    candidate: "", tasks: "default", mode: "", rollouts: "",
+    model: "" });
   const load = () => api("/regressions").then(setList).catch(() => {});
   useEffect(() => { load();
     api("/skills").then(setSkills).catch(() => {}); }, []);
@@ -845,6 +846,7 @@ function RegressionsBody() {
     const body = { skill: form.skill, baseline: form.baseline,
       candidate: form.candidate, tasks: form.tasks || "default" };
     if (form.mode) body.mode = form.mode;
+    if (form.model) body.model = form.model;
     if (form.rollouts) body.rollouts = parseInt(form.rollouts, 10);
     api("/regressions", { method: "POST", body: JSON.stringify(body) })
       .then((r) => { setMsg(`job ${r.job} — ` +
@@ -892,6 +894,9 @@ function RegressionsBody() {
         <input value={form.rollouts} placeholder="rollouts" type="number"
           style={{ width: 80 }}
           onChange={(e) => setForm({ ...form, rollouts: e.target.value })} />
+        <input value={form.model} placeholder="model (default: lab)"
+          style={{ width: 170 }}
+          onChange={(e) => setForm({ ...form, model: e.target.value })} />
         <button className="primary" onClick={run}
           disabled={!form.skill || !form.baseline || !form.candidate}>
           Run</button>
@@ -1125,29 +1130,27 @@ function BenchLauncher({ onLaunched }) {
   const [skills, setSkills] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [f, setF] = useState({ skill: "", variant: "", tasks: [],
-    rollouts: 1, kind: "benchmark" });
+    rollouts: 1, model: "mock", mode: "available" });
+  const [adv, setAdv] = useState(false);
   const [msg, setMsg] = useState("");
   useEffect(() => {
     api("/skills").then(setSkills).catch(() => {});
     api("/tasks").then(setTasks).catch(() => {});
+    api("/status").then((s) => s?.model &&
+      setF((x) => ({ ...x, model: s.model }))).catch(() => {});
   }, []);
   const sk = skills.find((s) => s.id === f.skill);
   const variants = sk?.variants || [];
 
   const launch = () => {
     const ref = `${f.skill}@${f.variant}`;
-    if (f.kind === "regression") {
-      // needs a second variant — handled by the regressions form below
-      setMsg("pick baseline + candidate in the regression form");
-      return;
-    }
     const id = `bench-${f.skill}-${Date.now().toString(36)}`;
     const config = {
       id, title: `Benchmark ${ref}`,
       hypothesis: `${ref} improves task performance vs no-skill control`,
       independent_var: "skill_variant", category: "capability",
-      fixed: { model: "mock", temperature: 0.0,
-               seed_policy: "varied", injection_mode: "available",
+      fixed: { model: f.model || "mock", temperature: 0.0,
+               seed_policy: "varied", injection_mode: f.mode,
                harness: "standard-tools-v1" },
       arms: [{ name: "control", skill: null },
              { name: "treatment", skill: ref }],
@@ -1186,11 +1189,39 @@ function BenchLauncher({ onLaunched }) {
         style={{ width: 70 }} title="rollouts per arm"
         onChange={(e) => setF({ ...f,
           rollouts: parseInt(e.target.value, 10) || 1 })} />
+      <button className="link" onClick={() => setAdv(!adv)}>
+        {adv ? "▾" : "▸"} model</button>
       <button className="primary"
         disabled={!f.skill || !f.variant || !f.tasks.length}
         onClick={launch}>Run benchmark</button>
       <span className="mut small">{msg}</span>
     </div>
+    {adv && <div className="toolbar" style={{ borderTop:
+      "1px solid var(--rule)", paddingTop: 10 }}>
+      <label className="fld" style={{ flexDirection: "row", gap: 8,
+        alignItems: "baseline" }}>model
+        <input list="models" value={f.model} style={{ width: 260 }}
+          onChange={(e) => setF({ ...f, model: e.target.value })} />
+        <datalist id="models">
+          <option value="mock" />
+          <option value="anthropic/claude-sonnet-4-5" />
+          <option value="anthropic/claude-haiku-4-5" />
+          <option value="openai/gpt-4o" />
+          <option value="openai/gpt-4o-mini" />
+          <option value="gemini/gemini-2.0-flash" />
+          <option value="ollama/llama3.2" />
+        </datalist>
+      </label>
+      <label className="fld" style={{ flexDirection: "row", gap: 8,
+        alignItems: "baseline" }}>mode
+        <select value={f.mode}
+          onChange={(e) => setF({ ...f, mode: e.target.value })}>
+          <option value="available">available (trigger)</option>
+          <option value="injected">injected (content)</option>
+        </select>
+      </label>
+      {f.model === "mock" && <span className="pill warn">simulated</span>}
+    </div>}
   </div>;
 }
 
