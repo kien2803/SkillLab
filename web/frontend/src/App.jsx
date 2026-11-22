@@ -28,18 +28,11 @@ const ICONS = {
   key: "M14 10a4 4 0 1 0-4 4c.5 0 1-.1 1.4-.3L13 15h2v2h2v2h3v-3.2zM16.5 7.5a1 1 0 1 1 0 .01",
 };
 const NAV = [
-  [["/", "overview", "Overview"], ["/workspace", "workspace", "Workspace"]],
-  [["/projects", "research", "Research"],
-   ["/explorer", "explorer", "Web Explorer"],
-   ["/deep", "deep", "Deep Research"]],
-  [["/skills", "skills", "Skill Studio"],
-   ["/blueprints", "blueprints", "Blueprints"],
-   ["/experiments", "experiments", "Experiment Lab"],
-   ["/regressions", "regressions", "Regressions"]],
-  [["/proposals", "architect", "AI Architect"],
-   ["/failures", "failures", "Failures"]],
-  [["/knowledge", "knowledge", "Knowledge Base"],
-   ["/releases", "releases", "Release Center"]],
+  [["/", "overview", "Home"]],
+  [["/skills", "skills", "Skills"],
+   ["/suite", "workspace", "Test Suite"]],
+  [["/benchmark", "experiments", "Benchmark"]],
+  [["/report", "releases", "Report"]],
 ];
 
 function Rail() {
@@ -132,89 +125,94 @@ function AddForm({ ph, onAdd }) {
 const PHASES = ["discover","research","design","create","experiment",
   "analyze","improve","validate","release","learn"];
 
-function Overview() {
-  const [data, setData] = useState({});
-  const [st, setSt] = useState(null);
-  const [sh, setSh] = useState({ name: "", tasks: false, src: "",
-    force: false, msg: "" });
+/* The product workflow: import → suite → benchmark → analyze →
+   improve → validate → report. Each step shows done/current/todo
+   state computed from real lab data — never fabricated. */
+const STEPS = [
+  { n: 1, title: "Import skill", to: "/skills",
+    hint: "import or register the skill to benchmark" },
+  { n: 2, title: "Create test suite", to: "/suite",
+    hint: "tasks + rubrics the agent is scored on" },
+  { n: 3, title: "Run benchmark", to: "/benchmark",
+    hint: "baseline vs skill, controlled rollouts" },
+  { n: 4, title: "Analyze results", to: "/benchmark",
+    hint: "score matrix, activation, per-task outcomes" },
+  { n: 5, title: "Improve skill", to: "/skills",
+    hint: "edit files → a new variant (versions immutable)" },
+  { n: 6, title: "Validate new version", to: "/benchmark",
+    hint: "regression suite: old vs new variant" },
+  { n: 7, title: "Export report", to: "/report",
+    hint: "evidence-based quality report for clients" },
+];
+
+function Home() {
+  const [d, setD] = useState(null);
   useEffect(() => {
-    Promise.all([api("/projects"), api("/skills"), api("/experiments"),
-                 api("/releases"), api("/status"), api("/runs")])
-      .then(([projects, skills, experiments, releases, status, runs]) => {
-        setData({ projects, skills, experiments, releases, runs });
-        setSt(status); })
-      .catch(() => setData({}));
+    Promise.all([api("/skills"), api("/tasks"), api("/experiments"),
+                 api("/regressions"), api("/releases"), api("/status"),
+                 api("/runs")])
+      .then(([skills, tasks, exps, regs, rels, st, runs]) => setD(
+        { skills, tasks, exps, regs, rels, st, runs }))
+      .catch(() => setD({}));
   }, []);
-  const post = (url, body) =>
-    api(url, { method: "POST", body: JSON.stringify(body) })
-      .then((r) => setSh({ ...sh, msg:
-        r.path ? `→ ${r.path}`
-               : `imported ${r.imported ?? 0}, skipped ` +
-                 `${r.skipped ?? 0}, rejected ${r.rejected ?? 0}` }))
-      .catch((e) => setSh({ ...sh, msg: String(e) }));
-  const cells = [["projects", data.projects?.length],
-    ["skills", data.skills?.length],
-    ["experiments", data.experiments?.length],
-    ["releases", data.releases?.length],
-    ["runs", data.runs?.length]];
-  const nWarn = st?.warnings?.length || 0;
+  if (!d) return <Page title="SkillLab" sub="loading…" />;
+  const analyzed = (d.exps || []).some((e) =>
+    ["analyzed", "concluded"].includes(e.status));
+  const hasEvals = (d.runs || []).length > 0 && analyzed;
+  const multiVariant = (d.skills || []).some((s) =>
+    (s.variants || []).length > 1);
+  const done = [
+    (d.skills || []).length > 0,          // 1 import
+    (d.tasks || []).length > 0,           // 2 suite
+    (d.runs || []).length > 0,            // 3 benchmark
+    hasEvals,                             // 4 analyze
+    multiVariant,                         // 5 improve
+    (d.regs || []).length > 0,            // 6 validate
+    (d.rels || []).length > 0,            // 7 report
+  ];
+  const cur = done.findIndex((x) => !x);
   return <Page title="SkillLab"
-    sub={st ? `${st.root} · model ${st.model} (judge ${st.judge_model})` +
-      ` · sandbox ${st.sandbox || "off"}` : "loading…"}>
-    <div className="pipe" aria-label="lifecycle">
-      {PHASES.map((p, i) => (
-        <React.Fragment key={p}>
-          {i > 0 && <span className="arr">▸</span>}
-          <span className={"ph" +
-            ((st && !nWarn && i === 0) ? " on" : "")}>{p}</span>
-        </React.Fragment>))}
+    sub="skill benchmarking & QA — prove the skill helps">
+    <div className="steps" role="list">
+      {STEPS.map((s, i) => {
+        const state = done[i] ? "done"
+          : (i === cur || (cur === -1 && i === 6)) ? "cur" : "todo";
+        return <Link key={s.n} to={s.to}
+          className={"step " + state}>
+          <span className="step-n">{done[i] ? "✓" : s.n}</span>
+          <div>
+            <b>{s.title}</b>
+            <div className="small mut">{s.hint}</div>
+          </div>
+          {state === "cur" && cur !== -1 &&
+            <span className="pill acc">next</span>}
+        </Link>; })}
     </div>
-    <div className="kpis">
-      {cells.map(([k, v]) => (
-        <div key={k}><div className="k">{k}</div>
-          <div className="v num">{v ?? "\u2014"}</div></div>))}
-      <div><div className="k">warnings</div>
-        <div className={"v num" + (nWarn ? " warn" : "")}>{nWarn}</div></div>
-    </div>
-    {st && <div className="card">
-      <h3>Lab status
-        {nWarn ? <span className="pill warn" style={{ marginLeft: 8 }}>
-          {nWarn} warning{nWarn > 1 ? "s" : ""}</span>
-          : <span className="pill pos" style={{ marginLeft: 8 }}>ok</span>}
-      </h3>
-      <div className="small mut num">
-        files: {Object.entries(st.counts || {}).map(([k, n]) =>
-          `${k}=${n}`).join(" ")} · runs: {st.runs}</div>
-      {(st.warnings || []).map((w, i) =>
-        <div key={i} className="small warn mt">{w}</div>)}
-      <div className="toolbar" style={{ borderTop:
-        "1px solid var(--rule)", paddingTop: 12, marginTop: 12 }}>
-        <span className="mut">share pack</span>
-        <input value={sh.name} placeholder="export name"
-          onChange={(e) => setSh({ ...sh, name: e.target.value })} />
-        <label className="small">
-          <input type="checkbox" checked={sh.tasks}
-            onChange={(e) => setSh({ ...sh, tasks: e.target.checked })} />
-          +tasks</label>
-        <button disabled={!sh.name} onClick={() =>
-          post("/export", { name: sh.name, tasks: sh.tasks })}>
-          Export</button>
-        <input value={sh.src} placeholder="import from pack dir"
-          style={{ width: 240 }}
-          onChange={(e) => setSh({ ...sh, src: e.target.value })} />
-        <label className="small">
-          <input type="checkbox" checked={sh.force}
-            onChange={(e) => setSh({ ...sh, force: e.target.checked })} />
-          force</label>
-        <button disabled={!sh.src} onClick={() =>
-          post("/import", { src: sh.src, force: sh.force })}>
-          Import</button>
-        <span className="mut">{sh.msg}</span>
-      </div>
+    {cur === -1 && <div className="card">
+      <b className="ok">Full cycle complete.</b>
+      <div className="small mut">Import a new skill or a new version to
+        start another benchmark cycle.</div>
     </div>}
-    {data.runs?.length > 0 && <div className="card">
+    <div className="kpis">
+      {[["skills", (d.skills || []).length],
+        ["tasks", (d.tasks || []).length],
+        ["benchmarks", (d.exps || []).length],
+        ["regressions", (d.regs || []).length],
+        ["runs", (d.runs || []).length],
+        ["releases", (d.rels || []).length]]
+       .map(([k, v]) => (
+        <div key={k}><div className="k">{k}</div>
+          <div className="v num">{v}</div></div>))}
+    </div>
+    {d.st?.model === "mock" && <div className="card">
+      <span className="pill warn">model: mock</span>
+      <span className="small mut" style={{ marginLeft: 8 }}>
+        benchmark results are deterministic simulations — set a real
+        model in lab.yaml for production evidence.</span>
+    </div>}
+    {(d.runs || []).length > 0 && <div className="card">
       <h3>Recent runs</h3>
-      <div className="rows">{data.runs.slice(-6).reverse().map((r) =>
+      <div className="rows">{d.runs.slice(-6).reverse().map((r) =>
         <div key={r.run_id} className="r">
           <Link to={"/runs/" + r.run_id}><code>{r.run_id}</code></Link>
           <Pill v={r.status} />
@@ -231,7 +229,7 @@ function Projects() {
   const [link, setLink] = useState({ qid: "", field: "findings",
     ref: "" });
   const load = () => api("/projects").then(setList).catch(() => {});
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   const reload = (pid) => api("/projects/" + pid).then(setSel)
     .catch((e) => setMsg(String(e)));
   const post = (url, body) =>
@@ -438,7 +436,7 @@ function Skills() {
   const [imp, setImp] = useState("");
   const [editing, setEditing] = useState(null); // "skill@variant"
   const load = () => api("/skills").then(setList).catch(() => {});
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   const show = (kind, p) =>
     p.then((d) => setPanel({ kind, data: d }))
       .catch((e) => setMsg(String(e)));
@@ -460,7 +458,7 @@ function Skills() {
     return <Page title="Skill Studio" sub="editor">
       <SkillEditor skillRef={editing}
         onClose={() => { setEditing(null); load(); }} /></Page>;
-  return <Page title="Skill Studio" sub="registry, variants, lint">
+  return <Page title="Skill Management" sub="import, browse, edit, version, compare">
     <Msg m={msg} />
     <div className="card">
       <h3>Registry ops</h3>
@@ -605,7 +603,7 @@ function Proposals() {
   const [list, setList] = useState([]);
   const [msg, setMsg] = useState("");
   const load = () => api("/proposals").then(setList).catch(() => {});
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   const act = (id, a) =>
     api(`/proposals/${id}/${a}`, { method: "POST" })
       .then(() => { setMsg(`${id} ${a}d`); load(); })
@@ -636,7 +634,7 @@ function Failures() {
   const [cand, setCand] = useState({});
   const [msg, setMsg] = useState("");
   const load = () => api("/failures").then(setList).catch(() => {});
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   const analyze = () =>
     api(`/failures/${rid}`, { method: "POST" })
       .then(() => { setMsg(`analyzed ${rid}`); setRid(""); load(); })
@@ -774,7 +772,7 @@ function Knowledge() {
   const [form, setForm] = useState({ title: "", evidence: "" });
   const [msg, setMsg] = useState("");
   const load = () => api("/insights").then(setList).catch(() => {});
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   const open = (i) => api("/insights/" + i.id).then(setDet)
     .catch((e) => setMsg(String(e)));
   const create = () =>
@@ -831,7 +829,7 @@ function Knowledge() {
   </Page>;
 }
 
-function Regressions() {
+function RegressionsBody() {
   const [list, setList] = useState([]);
   const [skills, setSkills] = useState([]);
   const [det, setDet] = useState(null);
@@ -859,7 +857,7 @@ function Regressions() {
     ? (pct ? (m[k] * 100).toFixed(0) + "%"
       : typeof m[k] === "number" ? m[k].toFixed(2) : m[k])
     : "\u2014";
-  return <Page title="Regressions" sub="controlled baseline-vs-candidate">
+  return <>
     <Msg m={msg} />
     <div className="card">
       <h3>Run regression</h3>
@@ -936,10 +934,15 @@ function Regressions() {
           </tr>)}</tbody></table></>}
       {det.markdown && <pre className="dump">{det.markdown}</pre>}
     </div>}
-  </Page>;
+  </>;
 }
 
-function Experiments() {
+function Regressions() {
+  return <Page title="Regressions"
+    sub="controlled baseline-vs-candidate"><RegressionsBody /></Page>;
+}
+
+function ExperimentsBody() {
   const [list, setList] = useState([]);
   const [msg, setMsg] = useState("");
   const [runs, setRuns] = useState([]);
@@ -953,7 +956,7 @@ function Experiments() {
     api("/experiments").then(setList).catch(() => {});
     api("/runs").then(setRuns).catch(() => {});
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   const run = (id) =>
     api(`/experiments/${id}/run`, { method: "POST" })
       .then((r) => { setMsg(`${id}: job ${r.job} — ` +
@@ -1001,8 +1004,7 @@ function Experiments() {
     onChange: (e) => setAux({ ...aux, [k]: e.target.value }) });
   const CATS = ["capability","trigger","workflow","instruction","resource",
     "tool-use","compatibility","reliability","efficiency"];
-  return <Page title="Experiment Lab"
-    sub="arms × tasks, evidence over vibes">
+  return <>
     {editing && <ExperimentBuilder eid={editing}
       onClose={() => setEditing(null)}
       onRan={() => { setEditing(null); load(); }} />}
@@ -1110,6 +1112,213 @@ function Experiments() {
           <span className="mut">{r.skill_ref}</span></div>))}
       </div>
     </div>
+  </>;
+}
+
+function Experiments() {
+  return <Page title="Experiment Lab"
+    sub="arms × tasks, evidence over vibes"><ExperimentsBody /></Page>;
+}
+
+/* ---------- Benchmark module: launch + monitor + results ---------- */
+function BenchLauncher({ onLaunched }) {
+  const [skills, setSkills] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [f, setF] = useState({ skill: "", variant: "", tasks: [],
+    rollouts: 1, kind: "benchmark" });
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    api("/skills").then(setSkills).catch(() => {});
+    api("/tasks").then(setTasks).catch(() => {});
+  }, []);
+  const sk = skills.find((s) => s.id === f.skill);
+  const variants = sk?.variants || [];
+
+  const launch = () => {
+    const ref = `${f.skill}@${f.variant}`;
+    if (f.kind === "regression") {
+      // needs a second variant — handled by the regressions form below
+      setMsg("pick baseline + candidate in the regression form");
+      return;
+    }
+    const id = `bench-${f.skill}-${Date.now().toString(36)}`;
+    const config = {
+      id, title: `Benchmark ${ref}`,
+      hypothesis: `${ref} improves task performance vs no-skill control`,
+      independent_var: "skill_variant", category: "capability",
+      fixed: { model: "mock", temperature: 0.0,
+               seed_policy: "varied", injection_mode: "available",
+               harness: "standard-tools-v1" },
+      arms: [{ name: "control", skill: null },
+             { name: "treatment", skill: ref }],
+      tasks: f.tasks, rollouts_per_arm: f.rollouts,
+      status: "designed",
+    };
+    api("/experiments", { method: "POST",
+      body: JSON.stringify({ id, category: "capability", config }) })
+      .then(() => api(`/experiments/${id}/run`, { method: "POST" }))
+      .then((r) => { setMsg(`benchmark job ${r.job} — ` +
+        `${r.planned} rollouts`); onLaunched && onLaunched(r.job); })
+      .catch((e) => setMsg(String(e)));
+  };
+  return <div className="card">
+    <h3>New benchmark <span className="mut small">
+      control arm (no skill) vs treatment arm (skill)</span></h3>
+    <div className="toolbar">
+      <select value={f.skill} onChange={(e) => setF({ ...f,
+        skill: e.target.value, variant: "" })}>
+        <option value="">skill…</option>
+        {skills.map((s) => <option key={s.id}>{s.id}</option>)}
+      </select>
+      <select value={f.variant} disabled={!f.skill}
+        onChange={(e) => setF({ ...f, variant: e.target.value })}>
+        <option value="">variant…</option>
+        {variants.map((v) => <option key={v.id}>{v.id}</option>)}
+      </select>
+      <select multiple size={Math.min(4, Math.max(2, tasks.length))}
+        value={f.tasks}
+        onChange={(e) => setF({ ...f, tasks:
+          [...e.target.selectedOptions].map((o) => o.value) })}>
+        {tasks.map((t) => <option key={t.id} value={t.id}>
+          {t.id} · {t.kind}</option>)}
+      </select>
+      <input type="number" min="1" max="10" value={f.rollouts}
+        style={{ width: 70 }} title="rollouts per arm"
+        onChange={(e) => setF({ ...f,
+          rollouts: parseInt(e.target.value, 10) || 1 })} />
+      <button className="primary"
+        disabled={!f.skill || !f.variant || !f.tasks.length}
+        onClick={launch}>Run benchmark</button>
+      <span className="mut small">{msg}</span>
+    </div>
+  </div>;
+}
+
+function JobsCard({ jobs }) {
+  const act = (jobs || []).filter((j) =>
+    ["queued", "running"].includes(j.status));
+  if (!act.length) return null;
+  return <div className="card">
+    <h3>Running jobs</h3>
+    {act.map((j) => <div key={j.id} className="r small">
+      <code>{j.id}</code> <Pill v={j.status} />
+      <span className="mut">{j.operation || j.kind}</span>
+      <div className="prog" style={{ flex: 1, minWidth: 80 }}>
+        <div className="prog-bar"
+          style={{ width: `${(j.progress || 0) * 100}%` }} /></div>
+    </div>)}
+  </div>;
+}
+
+function Benchmarks() {
+  const [jobs, setJobs] = useState([]);
+  useEffect(() => {
+    const poll = () => api("/jobs").then(setJobs).catch(() => {});
+    poll();
+    const t = setInterval(poll, 2000);
+    return () => clearInterval(t);
+  }, []);
+  return <Page title="Benchmark"
+    sub="controlled evidence — baseline vs skill, version vs version">
+    <BenchLauncher />
+    <JobsCard jobs={jobs} />
+    <ExperimentsBody />
+    <RegressionsBody />
+  </Page>;
+}
+
+/* ---------- Report module: quality report per skill variant ------- */
+function Report() {
+  const [skills, setSkills] = useState([]);
+  const [ref, setRef] = useState("");
+  const [rep, setRep] = useState(null);
+  const [msg, setMsg] = useState("");
+  useEffect(() => { api("/skills").then(setSkills).catch(() => {}); },
+    []);
+  const refs = [];
+  skills.forEach((s) => (s.variants || []).forEach((v) =>
+    refs.push(`${s.id}@${v.id}`)));
+  const load = (r) => {
+    const [s, v] = r.split("@");
+    api(`/report/${s}/${v}`).then(setRep)
+      .catch((e) => { setRep(null); setMsg(String(e)); });
+  };
+  const exportMd = () => {
+    const [s, v] = ref.split("@");
+    fetch(`/api/v1/report/${s}/${v}?format=md`,
+      { headers: { Authorization: `Bearer ${tok()}` } })
+      .then((r) => r.blob())
+      .then((b) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(b);
+        a.download = `${s}-${v}-report.md`; a.click();
+        URL.revokeObjectURL(a.href); });
+  };
+  return <Page title="Quality Report"
+    sub="evidence-based summary for agency clients">
+    <div className="toolbar">
+      <select value={ref} onChange={(e) => { setRef(e.target.value);
+        setRep(null); setMsg(""); if (e.target.value)
+        load(e.target.value); }}>
+        <option value="">select skill@variant…</option>
+        {refs.map((r) => <option key={r}>{r}</option>)}
+      </select>
+      {rep && <button className="primary" onClick={exportMd}>
+        Export .md</button>}
+      <span className="mut small">{msg}</span>
+    </div>
+    {!ref && <div className="card empty mut">
+      Pick a skill version to build its quality report — benchmarks,
+      regression suites and the release checklist are assembled into a
+      single client-facing summary.</div>}
+    {rep && <>
+      <div className="card">
+        <h3>{rep.skill}@{rep.variant} {" "}
+          <span className={"pill " + (rep.verdict.label === "improved"
+            || rep.verdict.label === "validated" ? "pos"
+            : rep.verdict.label === "regressed"
+            || rep.verdict.label === "degraded" ? "neg" : "warn")}>
+            {rep.verdict.label}</span></h3>
+        <div className="small">{rep.verdict.text}</div>
+        <div className="small mut mono">hash {rep.content_hash}
+          {" · "}{rep.generated}{rep.simulated &&
+            " · simulated (model: mock)"}</div>
+      </div>
+      {rep.experiments.length > 0 && <div className="card">
+        <h3>Benchmarks ({rep.experiments.length})</h3>
+        {rep.experiments.map((e) => <div key={e.experiment}
+          className="r small">
+          <code>{e.experiment}</code>
+          <span className="mut">{e.model} · {e.injection_mode}</span>
+          {Object.entries(e.arms).map(([an, a]) =>
+            <span key={an}>{an}{a.skill ? ` (${a.skill})` : " (ctrl)"}:
+              {" "}{a.mean.toFixed(3)} <span className="mut">n={a.n}</span>
+            </span>)}
+          {"delta_vs_control" in e &&
+            <b className={e.delta_vs_control > 0 ? "ok" : "bad"}>
+              Δ {e.delta_vs_control > 0 ? "+" : ""}
+              {e.delta_vs_control}</b>}
+        </div>)}
+      </div>}
+      {rep.regressions.length > 0 && <div className="card">
+        <h3>Regression suites ({rep.regressions.length})</h3>
+        {rep.regressions.map((r) => <div key={r.id} className="r small">
+          <code>{r.id}</code>
+          <span className="mut">{r.baseline} → {r.candidate}</span>
+          <Pill v={(r.report || {}).verdict || r.verdict || "running"} />
+        </div>)}
+      </div>}
+      {rep.releases.length > 0 && <div className="card">
+        <h3>Release checklist</h3>
+        {rep.releases.map((r) => <div key={r.version}>
+          <b>v{r.version}</b> <Pill v={r.status} />
+          <div className="small mono" style={{ marginTop: 6 }}>
+            {(r.checklist || []).map((c) =>
+              <div key={c.id} className={c.ok ? "ok" : "bad"}>
+                {c.ok ? "✓" : "✗"} {c.id} — {c.detail}</div>)}
+          </div></div>)}
+      </div>}
+    </>}
   </Page>;
 }
 
@@ -1121,12 +1330,12 @@ function Workspace() {
     api("/tasks").then(setTs).catch(() => {});
     api("/rubrics").then(setRb).catch(() => {});
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
   const mk = (kind) => (v) =>
     api(`/${kind}`, { method: "POST", body: JSON.stringify({ id: v }) })
       .then(() => { setMsg(`${kind} '${v}' scaffolded`); load(); })
       .catch((e) => setMsg(String(e)));
-  return <Page title="Workspace" sub="task bank & rubrics">
+  return <Page title="Test Suite" sub="tasks the agent is scored on + rubric criteria">
     <Msg m={msg} />
     <div className="card">
       <h3>Tasks ({ts.length})</h3>
@@ -1175,7 +1384,7 @@ function RunDetail() {
   const [showTr, setShowTr] = useState(false);
   const load = () => api("/runs/" + rid).then(setD)
     .catch((e) => setMsg(String(e)));
-  useEffect(load, [rid]);
+  useEffect(() => { load(); }, [rid]);
   useEffect(() => { setArt(null); setScores({}); setMsg(""); }, [rid]);
   if (!d) return <Page title="Run">
     <Msg m={msg} />{!msg && <p className="mut">loading…</p>}</Page>;
@@ -1641,7 +1850,10 @@ export default function App() {
   }, []);
   if (!authed) return <Gate />;
   return (<div className="shell"><Rail /><Routes>
-    <Route path="/" element={<Overview />} />
+    <Route path="/" element={<Home />} />
+    <Route path="/benchmark" element={<Benchmarks />} />
+    <Route path="/report" element={<Report />} />
+    <Route path="/suite" element={<Workspace />} />
     <Route path="/projects" element={<Projects />} />
     <Route path="/explorer" element={<Explorer />} />
     <Route path="/deep" element={<DeepResearch />} />

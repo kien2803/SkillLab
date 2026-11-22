@@ -3,10 +3,13 @@ import { authed } from "./auth.js";
 
 authed();
 
-test("overview renders real lab stats", async ({ page }) => {
+test("home renders workflow steps + real lab stats", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("SkillLab")).toBeVisible();
-  await expect(page.getByText("projects")).toBeVisible();
+  await expect(page.getByText("Import skill")).toBeVisible();
+  await expect(page.getByText("Run benchmark")).toBeVisible();
+  await expect(page.getByText("Export report")).toBeVisible();
+  await expect(page.getByText("skills")).toBeVisible();
 });
 
 test("nav + projects page lists demo projects", async ({ page }) => {

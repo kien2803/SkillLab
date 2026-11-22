@@ -74,3 +74,25 @@ verified (tests listed); see commits `e4dcab1`, `c2c7790`.
   execution inside workers with real progress (done/total) + logs.
 - run_regression gained progress/should_stop hooks; cancelled batch
   leaves experiment 'running' (resumable via rerun), never faked done.
+
+## 2025-06 update — Product refocus: Benchmarking & QA platform
+
+- Nav collapsed to the four core modules: Home (guided 7-step
+  workflow: Import→Suite→Benchmark→Analyze→Improve→Validate→Report),
+  Skills, Test Suite, Benchmark, Report. Power pages (research,
+  blueprints, architect, knowledge, failures, releases) remain routed
+  as deep links but are removed from the rail.
+- `GET /api/v1/report/{skill}/{variant}` — assembled quality report:
+  content-hash-pinned benchmarks (per-arm means, shared-task delta vs
+  control only), regression verdicts, release checklist,
+  deterministic plain-language verdict, `?format=md` export w/
+  simulated-data banner when model=mock.
+- `Benchmarks` page: quick launcher (control vs treatment experiment
+  → job), running-jobs card w/ real progress, embedded experiment +
+  regression results.
+- Bug: `useEffect(load, [])` sites where `load` returned a Promise —
+  React treated it as cleanup → crash on unmount (latent since pages
+  were only ever navigated via goto). All 8 sites wrapped.
+- e2e: 28/28 — new workflow.spec covers the 4-module rail journey,
+  launcher guards, report verdict+export, step-card links; runs on a
+  disposable lab copy.

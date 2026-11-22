@@ -194,6 +194,26 @@ class TestJobsAPI:
                         headers=H)
         assert r.status_code == 404
 
+    def test_quality_report(self, client):
+        r = client.get("/api/v1/report/commit-helper/v3-bp",
+                       headers=H)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["skill"] == "commit-helper" and d["variant"] == "v3-bp"
+        assert d["content_hash"].startswith("sha256:")
+        assert "verdict" in d and "label" in d["verdict"]
+        assert isinstance(d["experiments"], list)
+        assert isinstance(d["regressions"], list)
+        assert d["simulated"] is True
+        r = client.get("/api/v1/report/commit-helper/v3-bp?format=md",
+                       headers=H)
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/markdown")
+        assert "attachment" in r.headers["content-disposition"]
+        assert "Quality Report" in r.text
+        assert client.get("/api/v1/report/commit-helper/nope",
+                          headers=H).status_code == 404
+
     def test_regression_via_job(self, client):
         r = client.post("/api/v1/regressions", headers=H, json={
             "skill": "commit-helper", "baseline": "v1",

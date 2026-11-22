@@ -1077,6 +1077,188 @@ def exp_report(eid: str, l: Lab = Depends(lab)):
     return {"experiment": eid, "markdown": build_report(l, exp)}
 
 
+# ---------------- quality report (module 4) ----------------
+
+@app.get("/api/v1/report/{skill}/{variant}")
+def quality_report(skill: str, variant: str, format: str = "json",
+                   l: Lab = Depends(lab)):
+    """Assembled evidence report for one skill variant — the agency
+    deliverable: config, score matrix, regressions, release checklist,
+    verdict. `?format=md` returns a markdown file for export."""
+    import statistics
+    from skilllab.models import load_yaml
+    from skilllab.release import checklist, variant_hash
+    from skilllab.report import load_runs
+    ref = f"{skill}@{variant}"
+    try:
+        l.variant_dir(skill, variant)
+    except LabError as e:
+        raise HTTPException(404, str(e))
+    vhash = variant_hash(l, skill, variant)
+
+    # --- experiments where this variant is an arm ---
+    exps = []
+    all_exps = [l.experiment(x.name)
+                for x in sorted(l.experiments_dir.iterdir())
+                if (x / "experiment.yaml").is_file()] \
+        if l.experiments_dir.is_dir() else []
+    for e in all_exps:
+        arm_names = [a.name for a in e.arms if a.skill == ref]
+        if not arm_names:
+            continue
+        # per-arm mean; delta computed only over tasks both arms ran
+        cells: dict[tuple[str, str], list[float]] = {}
+        for rec, ev in load_runs(l, e.id):
+            if rec.status == "error" or not ev \
+                    or ev.status not in ("passed", "failed"):
+                continue
+            s = ev.rubric_score if ev.rubric_score is not None else (
+                1.0 if ev.status == "passed" else 0.0)
+            cells.setdefault((rec.arm, rec.task), []).append(s)
+        def _mean(a, t):
+            xs = cells.get((a, t))
+            return statistics.mean(xs) if xs else None
+        tasks = sorted({t for (_, t) in cells})
+        arms = {}
+        for a in e.arms:
+            xs = [x for (an, _), lst in cells.items() if an == a.name
+                  for x in lst]
+            if xs:
+                arms[a.name] = {"skill": a.skill,
+                                "mean": statistics.mean(xs), "n": len(xs)}
+        ctrl = next((a for a in e.arms if not a.skill), None)
+        entry = {"experiment": e.id, "title": e.title,
+                 "status": e.status, "model": e.fixed.model,
+                 "injection_mode": e.fixed.injection_mode,
+                 "tasks": tasks, "arms": arms}
+        an = arm_names[0]
+        if ctrl and an in arms and ctrl.name in arms:
+            ds = [_mean(an, t) - _mean(ctrl.name, t) for t in tasks
+                  if _mean(an, t) is not None
+                  and _mean(ctrl.name, t) is not None]
+            if ds:
+                entry["delta_vs_control"] = round(
+                    statistics.mean(ds), 3)
+                entry["shared_tasks"] = len(ds)
+        exps.append(entry)
+
+    # --- regressions touching this variant ---
+    from skilllab.regression import list_regressions
+    regs = [r for r in list_regressions(l)
+            if r.get("skill") == skill and variant in
+            (r.get("baseline"), r.get("candidate"))]
+    for r in regs:
+        rp = l.d("regressions") / r["id"] / "report.yaml"
+        if rp.is_file():
+            r["report"] = load_yaml(rp)
+
+    # --- releases for this variant ---
+    rels = []
+    rdir = l.d("releases") / skill
+    if rdir.is_dir():
+        for f in sorted(rdir.glob("*.yaml")):
+            r = load_yaml(f)
+            if r.get("variant") == variant:
+                rels.append({"version": r.get("version"),
+                             "status": r.get("status"),
+                             "released_at": r.get("released_at"),
+                             "checklist": checklist(
+                                 l, skill, r["version"])})
+
+    mock = l.cfg.get("model") == "mock" or all(
+        e["model"] == "mock" for e in exps) if exps else \
+        l.cfg.get("model") == "mock"
+    report = {
+        "skill": skill, "variant": variant, "content_hash": vhash,
+        "generated": __import__("datetime").datetime.now()
+        .astimezone().isoformat(timespec="seconds"),
+        "experiments": exps, "regressions": regs, "releases": rels,
+        "simulated": bool(mock),
+        "verdict": _report_verdict(exps, regs, rels),
+    }
+    if format == "md":
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(
+            _report_markdown(report),
+            media_type="text/markdown",
+            headers={"Content-Disposition":
+                     f'attachment; filename="{skill}-{variant}-report.md"'})
+    return report
+
+
+def _report_verdict(exps, regs, rels):
+    """Deterministic plain-language verdict — no invented confidence."""
+    deltas = [e["delta_vs_control"] for e in exps
+              if "delta_vs_control" in e]
+    regressed = [r for r in regs
+                 if (r.get("report") or {}).get("verdict") == "regressed"]
+    released = any(r["status"] == "released" for r in rels)
+    if regressed:
+        return {"label": "regressed",
+                "text": f"{len(regressed)} regression suite(s) report a "
+                        "regression for this variant."}
+    if deltas:
+        d = sum(deltas) / len(deltas)
+        label = "improved" if d > 0.02 else ("degraded" if d < -0.02
+                                             else "neutral")
+        return {"label": label,
+                "text": f"Mean delta vs control across {len(deltas)} "
+                        f"experiment(s): {d:+.3f}."
+                        + (" Released." if released else "")}
+    clean = [r for r in regs
+             if (r.get("report") or {}).get("verdict") == "clean"]
+    if clean or released:
+        return {"label": "validated",
+                "text": f"{len(clean)} clean regression suite(s)"
+                        + (" and a passed release checklist"
+                           if released else "") + " for this variant."}
+    return {"label": "insufficient-evidence",
+            "text": "No completed benchmark evidence for this variant "
+                    "yet — run a benchmark first."}
+
+
+def _report_markdown(r):
+    lines = [f"# Quality Report — {r['skill']}@{r['variant']}",
+             f"Generated: {r['generated']} · Content hash: "
+             f"`{r['content_hash']}`", ""]
+    if r["simulated"]:
+        lines.append("> **Simulated data** — benchmarks ran under "
+                     "`model: mock`. Not real model evidence.")
+        lines.append("")
+    v = r["verdict"]
+    lines += [f"## Verdict: {v['label']}", "", v["text"], ""]
+    if r["experiments"]:
+        lines += ["## Benchmark results", "",
+                  "| Experiment | Arm | Mean score | n | Δ vs control |",
+                  "|---|---|---|---|---|"]
+        for e in r["experiments"]:
+            for an, a in e["arms"].items():
+                lines.append(
+                    f"| {e['experiment']} | {an} | {a['mean']:.3f} | "
+                    f"{a['n']} | "
+                    f"{e.get('delta_vs_control', '—') if a['skill'] else 'control'} |")
+        lines.append("")
+    if r["regressions"]:
+        lines += ["## Regression suites", "",
+                  "| Suite | Baseline → Candidate | Verdict |",
+                  "|---|---|---|"]
+        for rg in r["regressions"]:
+            verdict = (rg.get("report") or {}).get("verdict",
+                                                  rg.get("verdict") or "—")
+            lines.append(f"| {rg['id']} | {rg.get('baseline')} → "
+                         f"{rg.get('candidate')} | {verdict} |")
+        lines.append("")
+    if r["releases"]:
+        lines += ["## Release checklist", ""]
+        for rel in r["releases"]:
+            lines.append(f"### v{rel['version']} — {rel['status']}")
+            for c in rel.get("checklist", []):
+                lines.append(f"- [{'x' if c['ok'] else ' '}] "
+                             f"{c['id']} — {c.get('detail', '')}")
+            lines.append("")
+    return "\n".join(lines)
+
+
 # ---------------- knowledge base: insights + principles ----------------
 
 @app.get("/api/v1/insights")
