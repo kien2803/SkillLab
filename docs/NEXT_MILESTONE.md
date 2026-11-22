@@ -3,37 +3,78 @@
 ## Current architecture
 
 - `skilllab/` — domain + execution engine (lab config, engine,
-  evaluate, graduation, release, deep research, share/registry).
-  Filesystem-only persistence (YAML/MD/JSONL).
-- `web/backend/` — FastAPI (`app.py` ~1.8k lines single file) +
-  `jobs.py` (SQLite job store + daemon threads).
-- `web/frontend/` — React 18 + vite, single `App.jsx` (~1.65k lines),
-  `data-terminal` visual system.
-- Auth: bearer token on all `/api/*` (middleware); sign-in gate.
+  evaluate, graduation, release, deep research, share/registry,
+  regression). Filesystem-only persistence (YAML/MD/JSONL).
+- `web/backend/` — FastAPI (`app.py` single file) + `jobs.py`
+  (SQLite store, bounded ThreadPoolExecutor, cancel/timeout/
+  interrupted-recovery, schema migration).
+- `web/frontend/` — React 18 + vite. `App.jsx` (pages/shell) +
+  extracted `features/` modules: `skills/SkillEditor.jsx`,
+  `experiments/ExperimentBuilder.jsx`; shared client `api.js`.
+- Auth: bearer token on all `/api/*` (middleware); sign-in gate UI.
 - Persistence: `<lab>/jobs/jobs.sqlite` for job metadata only.
 
-## Confirmed issues (this milestone)
+## Milestone status (this pass)
 
-- CI frontend job: playwright `webServer` calls `.venv/bin/uvicorn`
-  but no venv is created → `.venv/bin/uvicorn: not found`.
-- `pypdf` imported by `webio.extract_doc` but not in `web` extras.
-- `jobs.py`: daemon threads lost on restart (running jobs look alive
-  forever), no worker bound, no timeout, `submit` races.
-- `release.py`: variant hash pinned at validate but run evidence not
-  required to hash-match the released content.
-- `graduation.py`: usable-vs-total accounting exists but exclusion
-  reasons are not surfaced.
-- Skill Editor UI missing (API exists).
-- Experiment Builder UI missing (scaffold + run only).
-- Experiment runs execute synchronously inside POST handlers.
+DONE
+- CI: frontend job creates venv + installs `.[web]` (uvicorn found).
+- `pypdf` in `web` extras; malformed/empty PDF handled.
+- jobs: bounded pool, WAL, `interrupted` recovery, cooperative
+  timeout, cancel checkpoints, dedupe by key, legacy schema migrate.
+- release: canonical `dir_hash` everywhere; evidence must match
+  skill+variant+content-hash+ok-run+completed-eval; legacy/unverifiable
+  bucket reported separately; gates configurable + validated.
+- graduation: usable-vs-total sample accounting + exclusion reasons.
+- Skill Editor: 3-pane workspace (tree/editor/validate+revisions),
+  base_sha optimistic concurrency (409 UI), snapshot-on-write,
+  restore, delete guard, create (PUT), rename (POST /rename),
+  upload resource, auto-open SKILL.md, Ctrl+S, beforeunload.
+- Experiment Builder: structured forms (general/model/arms/tasks),
+  save→server validate, concluded=read-only, run→job w/ live
+  progress+logs, detail runs list. Endpoints: GET detail,
+  PUT /config, POST /duplicate, run/rerun→job.
+- Executions (experiment run/rerun, regression) are jobs —
+  `{job,status,planned}` returned; regression loop reports real
+  progress + honours cancel (stops cleanly, resumable via rerun).
+- Tests: `tests/test_web.py` (11 TestClient tests: auth, editor
+  tree/write-409/revisions/restore/delete/rename guards, experiment
+  detail/config/duplicate/job, regression job, jobs API);
+  e2e 24/24 (auth gates via isolated request contexts, editor flow,
+  builder flow); e2e uses a disposable lab copy at
+  `/tmp/skilllab-e2e-lab` — demo-lab is never mutated.
+- demo-lab: release 1.0.0 has real exact-hash evidence (v3-bp
+  rollout + passed eval); older-content runs stay `unverifiable`.
 
-## Implementation stages
+REMAINING LIMITATIONS
+- Editor: plain textarea (no syntax highlight); no token-estimate
+  panel inside editor (exists in preview).
+- Builder: no dedicated experiment dashboard page (Compare/Report/
+  Runs panels exist on the list view); rubric is per-task, not a
+  per-experiment selector.
+- Regression card shows "job queued" only — no live progress bar
+  (polling exists in the builder; a shared `RunMonitor` component
+  is the next extraction).
+- `app.py` remains one file — `routers/` split deferred (routes
+  already delegate to `skilllab/*`).
+- No TypeScript / state-library migration (out of scope).
 
-1. CI/deps/docker (this file's stage 1).
-2. Jobs hardening; release hash evidence; graduation accounting.
-3. Skill Editor (tree/editor/save/revisions/validate).
-4. Experiment Builder (config forms, arms/tasks/model/rubric).
-5. Experiment execution via jobs.
-6. Tests; 7. extraction + docs.
+## Next milestone candidates
 
-## Files changed / tests — see git log + final report.
+1. `features/jobs/JobMonitor.jsx` — global job bar (poll /jobs,
+   cancel buttons, log drawer) shared by experiments, regressions,
+   deep research.
+2. Editor: create-folder UX, drag-reorder, binary badge, token
+   estimate + analysis panel consolidation.
+3. Builder: task detail drawer (rubric/kind/fixtures), arm-level
+   overrides table, experiment history view.
+4. Backend `routers/` split when app.py next grows.
+5. Docker e2e check on a host with a daemon (CI covers build).
+
+## Tests performed
+
+- `pytest tests/` → 107/107
+- `npx playwright test` → 24/24 (incl. editor save + builder
+  create/validate/save flows, isolated disposable lab)
+- TestClient flows: auth 401/200, editor write→409→revision→
+  restore→rename guards, experiment config/duplicate/job-run,
+  regression job completion.

@@ -502,6 +502,38 @@ def skill_file_delete(ref: str, path: str, l: Lab = Depends(lab)):
     return {"deleted": path}
 
 
+class RenameIn(BaseModel):
+    path: str
+    to: str
+
+
+@app.post("/api/v1/skills/{ref}/rename", dependencies=[Depends(auth)])
+def skill_file_rename(ref: str, body: RenameIn, l: Lab = Depends(lab)):
+    """Move/rename a file inside the variant. Both sides pass the same
+    containment checks; the old content is snapshotted under the new
+    name (rename = delete + create in the audit log)."""
+    from datetime import datetime
+    src = _variant_file(l, ref, body.path)
+    dst = _variant_file(l, ref, body.to)
+    if not src.is_file():
+        raise HTTPException(404, f"'{body.path}' not found")
+    if src.name == "SKILL.md" or dst.name == "SKILL.md":
+        raise HTTPException(400, "SKILL.md is the variant entry — "
+                            "its name is fixed")
+    if dst.exists():
+        raise HTTPException(409, f"'{body.to}' already exists")
+    if "revisions" in dst.relative_to(
+            _vdir(l, ref)).parts:
+        raise HTTPException(400, "cannot rename into revisions/")
+    rd = _rev_dir(l, ref)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / (datetime.now().strftime("%Y%m%d-%H%M%S") + "-" +
+           body.to.replace("/", "__"))).write_bytes(src.read_bytes())
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src.rename(dst)
+    return {"renamed": body.path, "to": body.to}
+
+
 @app.post("/api/v1/skills/{ref}/proposals", dependencies=[Depends(auth)])
 def suggest(ref: str, l: Lab = Depends(lab), llm: bool = False):
     """Deterministic patch proposals; ?llm=true asks the lab model for

@@ -41,6 +41,7 @@ export function SkillEditor({ skillRef, onClose }) {
     loadFiles();
     api(`/skills/${ref}/preview`).then(setMeta).catch(() => {});
     api(`/skills/${ref}/check`).then(setCheck).catch(() => setCheck([]));
+    open("SKILL.md");               // entry point — workflow step 4
   }, [skillRef]);
   useEffect(() => {                       // revisions for current file
     if (!cur) return;
@@ -107,6 +108,15 @@ export function SkillEditor({ skillRef, onClose }) {
       .then((r) => r.ok ? r.json() : r.json().then((e) =>
         Promise.reject(e.detail)))
       .then(() => { if (cur?.path === path) setCur(null); loadFiles(); })
+      .catch((e) => setMsg(String(e)));
+  };
+  const rename = () => {
+    if (!cur || cur.path === "SKILL.md") return;
+    const to = window.prompt("Rename/move to:", cur.path);
+    if (!to || to === cur.path) return;
+    api(`/skills/${ref}/rename`, { method: "POST",
+      body: JSON.stringify({ path: cur.path, to: to.trim() }) })
+      .then(() => { loadFiles(); open(to.trim()); })
       .catch((e) => setMsg(String(e)));
   };
   const restore = (rev) => {
@@ -186,6 +196,8 @@ export function SkillEditor({ skillRef, onClose }) {
               <span className="mut">sha {cur.sha}</span>
               {dirty && <span className="dirty">● modified</span>}
               <span style={{ flex: 1 }} />
+              {cur.path !== "SKILL.md" &&
+                <button onClick={rename}>Rename</button>}
               <button className="primary" disabled={!dirty}
                 onClick={save}>Save ⌘S</button>
             </div>

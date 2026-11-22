@@ -109,6 +109,30 @@ class TestSkillEditor:
                              params={"path": "SKILL.md"},
                              headers=H).status_code == 400
 
+    def test_create_and_rename(self, client):
+        ref = "commit-helper@v3-bp"
+        r = client.put(f"/api/v1/skills/{ref}/file", headers=H,
+                       json={"path": "notes.md", "text": "hi",
+                             "base_sha": ""})
+        assert r.status_code == 200
+        r = client.post(f"/api/v1/skills/{ref}/rename", headers=H,
+                        json={"path": "notes.md", "to": "docs/notes.md"})
+        assert r.status_code == 200
+        files = client.get(f"/api/v1/skills/{ref}/files",
+                           headers=H).json()["files"]
+        assert "docs/notes.md" in [f["path"] for f in files]
+        # guards: collision, SKILL.md, traversal, revisions escape
+        assert client.post(f"/api/v1/skills/{ref}/rename", headers=H,
+                           json={"path": "docs/notes.md",
+                                 "to": "SKILL.md"}).status_code == 400
+        assert client.post(f"/api/v1/skills/{ref}/rename", headers=H,
+                           json={"path": "docs/notes.md",
+                                 "to": "../x"}).status_code == 400
+        assert client.post(f"/api/v1/skills/{ref}/rename", headers=H,
+                           json={"path": "docs/notes.md",
+                                 "to": "revisions/x"}
+                           ).status_code == 400
+
 
 class TestExperimentAPI:
     def test_detail_config_put_and_duplicate(self, client):
