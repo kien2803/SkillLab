@@ -1,0 +1,36 @@
+id: reg-commit-helper-v1-v3-bp-03
+title: 'Regression commit-helper: v1 → v3-bp'
+hypothesis: v3-bp does not regress vs v1 on 'default'
+independent_var: skill_variant
+category: null
+fixed:
+  model: anthropic/claude-haiku-4-5
+  temperature: 0.0
+  seed_policy: varied
+  harness: standard-tools-v1
+  injection_mode: available
+arms:
+- name: baseline
+  skill: commit-helper@v1
+  model: null
+  injection_mode: null
+- name: candidate
+  skill: commit-helper@v3-bp
+  model: null
+  injection_mode: null
+tasks:
+- unrelated-refactor
+- write-a-commit-message
+- write-a-commit-message-for-stage
+- write-commit-msg
+rollouts_per_arm: 1
+metrics:
+- activation_rate
+- false_activation
+- rubric_score
+- token_cost
+- turns
+- outcome_variance
+status: analyzed
+conclusion: null
+insights_generated: []

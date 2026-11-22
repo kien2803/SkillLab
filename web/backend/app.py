@@ -2116,6 +2116,77 @@ def lab_status(l: Lab = Depends(lab)):
             "runs": n_runs, "warnings": warns}
 
 
+# --- provider / model detection -------------------------------------------
+# Any litellm model string is accepted. These tables only *identify* which
+# provider a model string or an API key belongs to — keys are never
+# returned, only their presence + recognizable prefix.
+
+_PROVIDERS = [
+    # id, env vars (first match wins), key prefix hints, example model
+    ("anthropic", ["ANTHROPIC_API_KEY"], ["sk-ant-"],
+     "anthropic/claude-sonnet-4-5"),
+    ("openai", ["OPENAI_API_KEY"], ["sk-proj-", "sk-"], "openai/gpt-4o"),
+    ("gemini", ["GEMINI_API_KEY", "GOOGLE_API_KEY"], ["AIza"],
+     "gemini/gemini-2.0-flash"),
+    ("xai", ["XAI_API_KEY"], ["xai-"], "xai/grok-3"),
+    ("groq", ["GROQ_API_KEY"], ["gsk_"], "groq/llama-3.3-70b"),
+    ("mistral", ["MISTRAL_API_KEY"], [], "mistral/mistral-large-latest"),
+    ("perplexity", ["PERPLEXITYAI_API_KEY"], ["pplx-"], "perplexity/sonar"),
+    ("openrouter", ["OPENROUTER_API_KEY"], ["sk-or-"], "openrouter/auto"),
+    ("deepseek", ["DEEPSEEK_API_KEY"], ["sk-"], "deepseek/deepseek-chat"),
+    ("cohere", ["COHERE_API_KEY"], [], "cohere/command-r-plus"),
+    ("huggingface", ["HF_TOKEN", "HUGGINGFACE_API_KEY"], ["hf_"],
+     "huggingface/meta-llama/Llama-3.3-70B-Instruct"),
+    ("nvidia", ["NVIDIA_API_KEY"], ["nvapi-"], "nvidia/llama-3.1-405b"),
+    ("ollama", [], [], "ollama/llama3.2"),   # local — no key needed
+]
+
+
+def _resolve_provider(model: str) -> str:
+    """Model string → provider id. mock/cmd are local drivers; otherwise
+    ask litellm (handles unprefixed names like 'gpt-4o'), falling back to
+    the prefix before '/'."""
+    if model == "mock" or model.startswith("mock:"):
+        return "mock"
+    if model.startswith("cmd:"):
+        return "cmd"
+    try:
+        import litellm
+        return litellm.get_llm_provider(model)[1] or "unknown"
+    except Exception:
+        return model.split("/", 1)[0] if "/" in model else "unknown"
+
+
+@app.get("/api/v1/models")
+def models(l: Lab = Depends(lab)):
+    """Which providers the server can actually call: env keys detected
+    (never their values) + a resolve example per provider."""
+    import os
+    providers = []
+    for pid, envs, prefixes, example in _PROVIDERS:
+        hit = next((e for e in envs if os.environ.get(e)), None)
+        hint = recognized = None
+        if hit:
+            key = os.environ[hit]
+            hint = (key[:8] + "…") if len(key) > 8 else "(set)"
+            recognized = (any(key.startswith(p) for p in prefixes)
+                          if prefixes else None)
+        providers.append({
+            "id": pid, "env": hit, "detected": bool(hit),
+            "hint": hint, "recognized": recognized,
+            "example": example})
+    return {"configured": l.cfg["model"],
+            "judge_model": l.cfg["judge_model"],
+            "providers": providers,
+            "accepts": "any litellm provider string, 'mock', or 'cmd:<driver>'"}
+
+
+@app.get("/api/v1/models/resolve")
+def models_resolve(model: str):
+    """Identify which provider a model string belongs to."""
+    return {"model": model, "provider": _resolve_provider(model)}
+
+
 @app.get("/api/v1/tasks")
 def tasks(l: Lab = Depends(lab)):
     return [t.model_dump(mode="json") for t in l.tasks()]

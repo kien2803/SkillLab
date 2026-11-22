@@ -1,0 +1,33 @@
+run_id: reg-commit-helper-v1-v3-bp-02--baseline--write-commit-msg--r0
+experiment: reg-commit-helper-v1-v3-bp-02
+arm: baseline
+task: write-commit-msg
+model:
+  name: anthropic/claude-sonnet-4-5
+  temperature: 0.0
+seed: 770205965
+injection_mode: available
+skill_ref: commit-helper@v1
+skill_hash: sha256:929bc7b421d9bdc84e92
+status: error
+error: "UnsupportedParamsError: litellm.UnsupportedParamsError: anthropic does not\
+  \ support parameters: ['seed'], for model=claude-sonnet-4-5. To drop these, set\
+  \ `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params:\
+  \ true`\n. \n If you want to use these params dynamically send allowed_openai_params=['seed']\
+  \ in your request."
+started: '2026-11-22T05:37:33.208909+00:00'
+finished: '2026-11-22T05:37:33.214640+00:00'
+usage:
+  input_tokens: 0
+  output_tokens: 0
+  turns: 0
+skill_events:
+- t: 0
+  event: offered
+  skill: commit-helper
+  path: null
+- t: 0
+  event: offered
+  skill: demo-skill
+  path: null
+final_message: ''

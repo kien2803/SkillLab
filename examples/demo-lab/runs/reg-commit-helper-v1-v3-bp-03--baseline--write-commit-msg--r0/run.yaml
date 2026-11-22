@@ -1,0 +1,34 @@
+run_id: reg-commit-helper-v1-v3-bp-03--baseline--write-commit-msg--r0
+experiment: reg-commit-helper-v1-v3-bp-03
+arm: baseline
+task: write-commit-msg
+model:
+  name: anthropic/claude-haiku-4-5
+  temperature: 0.0
+seed: 294160901
+injection_mode: available
+skill_ref: commit-helper@v1
+skill_hash: sha256:929bc7b421d9bdc84e92
+status: error
+error: 'AuthenticationError: litellm.AuthenticationError: Missing Anthropic API Key
+  - A call is being made to anthropic but no key is set either in the environment
+  variables or via params. Please set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`
+  in your environment vars, or configure workload identity federation via `ANTHROPIC_FEDERATION_RULE_ID`,
+  `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID` and `ANTHROPIC_IDENTITY_TOKEN_FILE`
+  (or `ANTHROPIC_IDENTITY_TOKEN`)'
+started: '2026-11-22T05:38:22.017648+00:00'
+finished: '2026-11-22T05:38:22.033223+00:00'
+usage:
+  input_tokens: 0
+  output_tokens: 0
+  turns: 0
+skill_events:
+- t: 0
+  event: offered
+  skill: commit-helper
+  path: null
+- t: 0
+  event: offered
+  skill: demo-skill
+  path: null
+final_message: ''

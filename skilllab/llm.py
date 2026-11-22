@@ -138,6 +138,9 @@ def _litellm_complete(model: str, temperature: float, seed: Optional[int],
         kwargs["tool_choice"] = "auto"
     if seed is not None:
         kwargs["seed"] = seed
+    # Providers reject params they don't support (e.g. anthropic + seed) —
+    # drop them rather than failing every rollout.
+    litellm.drop_params = True
     transient = tuple(cls for n in _TRANSIENT
                       if isinstance((cls := getattr(litellm, n, None)), type))
     for attempt in range(max_retries + 1):

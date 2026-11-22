@@ -898,6 +898,7 @@ function RegressionsBody() {
         <input value={form.model} placeholder="model (default: lab)"
           style={{ width: 170 }}
           onChange={(e) => setForm({ ...form, model: e.target.value })} />
+        {form.model && <ModelHint model={form.model} />}
         <button className="primary" onClick={run}
           disabled={!form.skill || !form.baseline || !form.candidate}>
           Run</button>
@@ -1127,6 +1128,33 @@ function Experiments() {
 }
 
 /* ---------- Benchmark module: launch + monitor + results ---------- */
+function ModelHint({ model }) {
+  /* Which provider a model string belongs to + whether the server has a
+     key for it — so a typo or a missing key is visible before launch. */
+  const [provs, setProvs] = useState([]);
+  const [info, setInfo] = useState(null);
+  useEffect(() => {
+    api("/models").then((m) => setProvs(m.providers || []))
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!model) { setInfo(null); return; }
+    const t = setTimeout(() =>
+      api(`/models/resolve?model=${encodeURIComponent(model)}`)
+        .then(setInfo).catch(() => setInfo(null)), 350);
+    return () => clearTimeout(t);
+  }, [model]);
+  if (!model || !info || info.provider === "unknown") return null;
+  const p = provs.find((x) => x.id === info.provider);
+  const local = ["mock", "cmd", "ollama"].includes(info.provider);
+  const keyNote = p?.detected
+    ? ` · key detected (${p.hint})`
+    : local ? " · local, no key needed" : " · no key — set its env var";
+  return <span className="small" style={{
+    color: p?.detected || local ? "var(--muted)" : "var(--warn, #b25f00)" }}>
+    provider: {info.provider}{keyNote}</span>;
+}
+
 function BenchLauncher({ onLaunched }) {
   const [skills, setSkills] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -1222,6 +1250,7 @@ function BenchLauncher({ onLaunched }) {
         </select>
       </label>
       {f.model === "mock" && <span className="pill warn">simulated</span>}
+      <ModelHint model={f.model} />
     </div>}
   </div>;
 }

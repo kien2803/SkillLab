@@ -1,0 +1,142 @@
+id: reg-commit-helper-v1-v3-bp-02
+verdict: inconclusive
+counts:
+  critical: 0
+  quality: 0
+  activation: 0
+  false-activation: 0
+  efficiency: 0
+  stability: 0
+tasks:
+- task: unrelated-refactor
+  kind: activation-negative
+  categories: []
+  improvements: []
+  notes:
+  - insufficient runs (n=1v1, min=3)
+  - no final evaluations on one/both sides — outcome comparison impossible
+  baseline:
+    n_runs: 1
+    errors: 1
+    error_rate: 1.0
+    n_final: 0
+    incomplete: 0
+    success: null
+    score: null
+    activated: null
+    tokens: null
+    latency: null
+    turns: null
+    variance: 0.0
+  candidate:
+    n_runs: 1
+    errors: 1
+    error_rate: 1.0
+    n_final: 0
+    incomplete: 0
+    success: null
+    score: null
+    activated: null
+    tokens: null
+    latency: null
+    turns: null
+    variance: 0.0
+- task: write-a-commit-message
+  kind: activation-positive
+  categories: []
+  improvements: []
+  notes:
+  - insufficient runs (n=1v1, min=3)
+  - no final evaluations on one/both sides — outcome comparison impossible
+  baseline:
+    n_runs: 1
+    errors: 1
+    error_rate: 1.0
+    n_final: 0
+    incomplete: 0
+    success: null
+    score: null
+    activated: null
+    tokens: null
+    latency: null
+    turns: null
+    variance: 0.0
+  candidate:
+    n_runs: 1
+    errors: 1
+    error_rate: 1.0
+    n_final: 0
+    incomplete: 0
+    success: null
+    score: null
+    activated: null
+    tokens: null
+    latency: null
+    turns: null
+    variance: 0.0
+- task: write-a-commit-message-for-stage
+  kind: activation-positive
+  categories: []
+  improvements: []
+  notes:
+  - insufficient runs (n=1v1, min=3)
+  - no final evaluations on one/both sides — outcome comparison impossible
+  baseline:
+    n_runs: 1
+    errors: 1
+    error_rate: 1.0
+    n_final: 0
+    incomplete: 0
+    success: null
+    score: null
+    activated: null
+    tokens: null
+    latency: null
+    turns: null
+    variance: 0.0
+  candidate:
+    n_runs: 1
+    errors: 1
+    error_rate: 1.0
+    n_final: 0
+    incomplete: 0
+    success: null
+    score: null
+    activated: null
+    tokens: null
+    latency: null
+    turns: null
+    variance: 0.0
+- task: write-commit-msg
+  kind: activation-positive
+  categories: []
+  improvements: []
+  notes:
+  - insufficient runs (n=1v1, min=3)
+  - no final evaluations on one/both sides — outcome comparison impossible
+  baseline:
+    n_runs: 1
+    errors: 1
+    error_rate: 1.0
+    n_final: 0
+    incomplete: 0
+    success: null
+    score: null
+    activated: null
+    tokens: null
+    latency: null
+    turns: null
+    variance: 0.0
+  candidate:
+    n_runs: 1
+    errors: 1
+    error_rate: 1.0
+    n_final: 0
+    incomplete: 0
+    success: null
+    score: null
+    activated: null
+    tokens: null
+    latency: null
+    turns: null
+    variance: 0.0
