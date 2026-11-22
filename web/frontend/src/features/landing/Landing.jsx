@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { motion, useScroll, useTransform, useSpring,
+  MotionConfig } from "motion/react";
 import { TOKEN_KEY } from "../../api.js";
 import { HeroPreview, Showcase, SkillPreview, SuitePreview,
   RegressionPreview, ReportPreview } from "./previews.jsx";
@@ -11,17 +13,26 @@ import "./landing.css";
 const GITHUB = "https://github.com/kien2803/SkillLab";
 
 function Reveal({ children, className = "", ...rest }) {
+  return <motion.div className={className}
+    initial={{ opacity: 0, y: 22 }}
+    whileInView={{ opacity: 1, y: 0 }}
+    viewport={{ once: true, margin: "-8%" }}
+    transition={{ duration: .55, ease: [0.16, 1, 0.3, 1] }}
+    {...rest}>{children}</motion.div>;
+}
+
+/* Product frame starts tilted and settles flat as it scrolls into view —
+   one dealt moment, scroll-linked, spring-softened. */
+function HeroShot({ children }) {
   const ref = useRef(null);
-  const [inView, setInView] = useState(false);
-  useEffect(() => {
-    const io = new IntersectionObserver((es) => es.forEach((e) => {
-      if (e.isIntersecting) { setInView(true); io.disconnect(); }
-    }), { threshold: .12 });
-    if (ref.current) io.observe(ref.current);
-    return () => io.disconnect();
-  }, []);
-  return <div ref={ref} className={`lp-rev ${inView ? "in" : ""} ${className}`}
-    {...rest}>{children}</div>;
+  const { scrollYProgress } = useScroll({ target: ref,
+    offset: ["start end", "center center"] });
+  const raw = useTransform(scrollYProgress, [0, 1], [8, 0]);
+  const rotateX = useSpring(raw, { stiffness: 90, damping: 20 });
+  const y = useTransform(scrollYProgress, [0, 1], [40, 0]);
+  return <motion.div ref={ref} className="lp-hero-shot"
+    style={{ rotateX, y, transformPerspective: 1400,
+      transformOrigin: "top center" }}>{children}</motion.div>;
 }
 
 const FAQ = [
@@ -61,7 +72,7 @@ export default function Landing() {
     }
   };
 
-  return <div className="lp">
+  return <MotionConfig reducedMotion="user"><div className="lp">
     {/* ---------- nav ---------- */}
     <header className="lp-nav">
       <div className="lp-nav-in">
@@ -91,21 +102,31 @@ export default function Landing() {
 
     {/* ---------- hero ---------- */}
     <section className="lp-hero" id="top">
-      <div className="lp-hero-grid">
-        <div>
-          <p className="lp-eyebrow">Skill benchmarking &amp; QA · for AI automation agencies</p>
-          <h1>Know if your AI skills <em>actually work.</em></h1>
-          <p className="lede">Benchmark, compare, and improve AI Agent Skills
-            with reproducible tests. Find out what works, what fails, and
-            what changes before deployment.</p>
-          <div className="lp-hero-ctas">
-            <button className="lp-btn" onClick={signIn}>Start Benchmarking</button>
+      <motion.div initial="hidden" animate="show"
+        variants={{ show: { transition: { staggerChildren: .09,
+          delayChildren: .05 } } }}>
+        {[
+          <p key="e" className="lp-eyebrow">Skill benchmarking &amp; QA ·
+            for AI automation agencies</p>,
+          <h1 key="h">Know if your AI skills <em>actually work.</em></h1>,
+          <p key="l" className="lede">Benchmark, compare, and improve
+            AI Agent Skills with reproducible tests. Find out what works,
+            what fails, and what changes before deployment.</p>,
+          <div key="c" className="lp-hero-ctas">
+            <button className="lp-btn" onClick={signIn}>Start Benchmarking
+              <span className="ar">→</span></button>
             <a className="lp-btn ghost" href="#how">See How It Works</a>
-          </div>
-          <p className="lp-hero-note">open source · yaml + markdown lab · no database</p>
-        </div>
-        <HeroPreview />
-      </div>
+          </div>,
+          <p key="n" className="lp-hero-note">open source ·
+            yaml + markdown lab · no database</p>,
+        ].map((el, i) =>
+          <motion.div key={i} style={{ display: "contents" }}
+            variants={{ hidden: { opacity: 0, y: 24 },
+              show: { opacity: 1, y: 0, transition:
+                { duration: .7, ease: [0.16, 1, 0.3, 1] } } }}>
+            {el}</motion.div>)}
+      </motion.div>
+      <HeroShot><HeroPreview /></HeroShot>
     </section>
 
     {/* ---------- problem ---------- */}
@@ -175,40 +196,28 @@ export default function Landing() {
           <p className="lp-eyebrow">Core modules</p>
           <h2 className="lp-h2">Everything you need to validate a skill.</h2>
         </Reveal>
-        <div className="lp-featgrid">
-          <Reveal><div className="lp-feat">
-            <div className="head">
-              <h3>Skill Management</h3>
-              <p>Import, organize, edit, and version your skills — with
-                revision history and safe in-browser editing.</p>
+        {[
+          { i: "01", h: "Skill Management",
+            p: "Import, organize, edit, and version your skills — with revision history and safe in-browser editing.",
+            v: <SkillPreview /> },
+          { i: "02", h: "Test Suites",
+            p: "Build reusable test cases and evaluation criteria — trigger, performance, and negative tasks with rubrics.",
+            v: <SuitePreview /> },
+          { i: "03", h: "Benchmark & Regression",
+            p: "Compare baseline vs skill and detect performance regressions between versions — per task, with evidence.",
+            v: <RegressionPreview /> },
+          { i: "04", h: "Quality Reports",
+            p: "Generate evidence-based reports pinned to the exact content tested — exportable for your team and clients.",
+            v: <ReportPreview /> },
+        ].map((f, fi) =>
+          <Reveal key={f.i}><div className={`lp-featrow ${fi % 2 ? "flip" : ""}`}>
+            <div>
+              <div className="idx">{f.i}</div>
+              <h3>{f.h}</h3>
+              <p>{f.p}</p>
             </div>
-            <div className="shot"><SkillPreview /></div>
-          </div></Reveal>
-          <Reveal><div className="lp-feat">
-            <div className="head">
-              <h3>Test Suites</h3>
-              <p>Build reusable test cases and evaluation criteria —
-                trigger, performance, and negative tasks with rubrics.</p>
-            </div>
-            <div className="shot"><SuitePreview /></div>
-          </div></Reveal>
-          <Reveal><div className="lp-feat">
-            <div className="head">
-              <h3>Benchmark &amp; Regression</h3>
-              <p>Compare baseline vs skill and detect performance
-                regressions between versions — per task, with evidence.</p>
-            </div>
-            <div className="shot"><RegressionPreview /></div>
-          </div></Reveal>
-          <Reveal><div className="lp-feat">
-            <div className="head">
-              <h3>Quality Reports</h3>
-              <p>Generate evidence-based reports pinned to the exact
-                content tested — exportable for your team and clients.</p>
-            </div>
-            <div className="shot"><ReportPreview /></div>
-          </div></Reveal>
-        </div>
+            <div>{f.v}</div>
+          </div></Reveal>)}
       </div>
     </section>
 
@@ -252,7 +261,8 @@ export default function Landing() {
         <h2>Stop guessing. Start proving.</h2>
         <p>Make your AI Agent Skills measurable, testable, and
           continuously improvable.</p>
-        <button className="lp-btn" onClick={signIn}>Start Benchmarking</button>
+        <button className="lp-btn" onClick={signIn}>Start Benchmarking
+          <span className="ar">→</span></button>
         <div className="mono-note">free &amp; open source — {GITHUB.replace("https://", "")}</div>
       </div></Reveal>
     </section>
@@ -285,5 +295,5 @@ export default function Landing() {
         <span className="legal">© SkillLab — MIT · preview figures are sample data, not real customer results</span>
       </div>
     </footer>
-  </div>;
+  </div></MotionConfig>;
 }

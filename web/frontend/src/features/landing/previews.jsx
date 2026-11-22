@@ -1,6 +1,24 @@
+import { useEffect, useRef, useState } from "react";
+import { useInView, animate } from "motion/react";
+
 /* Representative product previews for the landing page. These mirror the
    workbench's real UI language (mono data, row tables, verdict pills).
    All figures are sample data, labelled as such on the page. */
+
+function Num({ to, decimals = 2, prefix = "", style }) {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-10%" });
+  const [v, setV] = useState(0);
+  useEffect(() => {
+    if (!inView) return;
+    const c = animate(0, to, { duration: 1.1,
+      ease: [0.16, 1, 0.3, 1], onUpdate: setV });
+    return () => c.stop();
+  }, [inView, to]);
+  const s = v.toFixed(decimals);
+  return <div ref={ref} className="num" style={style}>
+    {prefix}{to < 0 ? s.replace("-", "−") : s}</div>;
+}
 
 function UI({ title, children, sample = true }) {
   return <div className="lp-ui">
@@ -14,13 +32,13 @@ export function HeroPreview() {
   return <UI title="skilllab · benchmark — commit-helper@v3-bp">
     <div className="lp-mgrid">
       <div className="lp-metric">
-        <div className="num" style={{ color: "var(--lp-ok)" }}>+0.41</div>
+        <Num to={0.41} prefix="+" style={{ color: "var(--lp-ok)" }} />
         <div className="cap">Δ score vs control</div></div>
       <div className="lp-metric">
-        <div className="num">0.83</div>
+        <Num to={0.83} />
         <div className="cap">treatment mean</div></div>
       <div className="lp-metric">
-        <div className="num">0.42</div>
+        <Num to={0.42} />
         <div className="cap">control mean</div></div>
     </div>
     <table className="lp-t">
@@ -106,11 +124,12 @@ export function Showcase() {
       <span className="lp-verdict">✓ improved</span>
     </div>
     <div className="lp-mgrid">
-      <div className="lp-metric"><div className="num">0.83</div>
+      <div className="lp-metric"><Num to={0.83} />
         <div className="cap">success, with skill</div></div>
-      <div className="lp-metric"><div className="num">0.42</div>
+      <div className="lp-metric"><Num to={0.42} />
         <div className="cap">success, baseline</div></div>
-      <div className="lp-metric"><div className="num" style={{ color: "var(--lp-ok)" }}>+0.41</div>
+      <div className="lp-metric"><Num to={0.41} prefix="+"
+        style={{ color: "var(--lp-ok)" }} />
         <div className="cap">Δ correctness</div></div>
     </div>
     <div className="lp-cols2">
