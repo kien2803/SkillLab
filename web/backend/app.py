@@ -104,8 +104,11 @@ def trace(ref: str, l: Lab = Depends(lab)):
 # ---------------- auth (single-user token) ----------------
 
 import secrets
+from typing import Optional
 from fastapi import Header
 from pydantic import BaseModel
+
+from skilllab.models import Rubric, TaskSpec
 
 _TOKEN = os.environ.get("SKILLLAB_TOKEN", "")
 _ENV = os.environ.get("SKILLLAB_ENV", "development").lower()
@@ -2195,21 +2198,125 @@ def models_resolve(model: str):
     return {"model": model, "provider": _resolve_provider(model)}
 
 
+# ---------------- test suite: tasks, rubrics, suites, datasets -------
+
+from skilllab.suite import (  # noqa: E402
+    apply_import, create_task, delete_rubric, delete_suite,
+    delete_task, delete_task_file, duplicate_rubric, duplicate_task,
+    export_tasks_csv, export_tasks_json, get_suite, list_suites,
+    list_task_files, preview_import, put_task_file, read_task_file,
+    rubric_refs, save_rubric, save_suite, task_refs, update_task,
+    validate_rubric, validate_suite, validate_task)
+
+
 @app.get("/api/v1/tasks")
 def tasks(l: Lab = Depends(lab)):
     return [t.model_dump(mode="json") for t in l.tasks()]
 
 
 @app.post("/api/v1/tasks", dependencies=[Depends(auth)])
-def task_new(body: IdIn, l: Lab = Depends(lab)):
-    """`lab task new` — scaffold task.yaml."""
-    from skilllab.cli import TASK_TEMPLATE
-    d = l.tasks_dir / body.id
-    if (d / "task.yaml").is_file():
-        raise HTTPException(409, f"task '{body.id}' already exists")
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "task.yaml").write_text(TASK_TEMPLATE.format(tid=body.id))
-    return {"path": str(d / "task.yaml")}
+def task_new(body: TaskSpec, l: Lab = Depends(lab)):
+    """Create a task — {id} alone scaffolds a minimal task; a full
+    TaskSpec writes complete task.yaml."""
+    spec = create_task(l, body)
+    return {"task": spec.model_dump(mode="json", exclude_none=True)}
+
+
+@app.get("/api/v1/tasks/{tid}")
+def task_get(tid: str, l: Lab = Depends(lab)):
+    try:
+        spec = l.task(tid)
+    except LabError:
+        raise HTTPException(404, f"task '{tid}' not found")
+    return {
+        "task": spec.model_dump(mode="json", exclude_none=True),
+        "resolved_prompt": spec.resolve_prompt(l.task_dir(tid)),
+        "files": list_task_files(l, tid),
+        "issues": validate_task(l, spec),
+        "refs": task_refs(l, tid)}
+
+
+@app.put("/api/v1/tasks/{tid}", dependencies=[Depends(auth)])
+def task_put(tid: str, body: TaskSpec, l: Lab = Depends(lab)):
+    try:
+        spec = update_task(l, tid, body)
+    except LabError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e))
+        raise
+    return {"task": spec.model_dump(mode="json", exclude_none=True),
+            "issues": validate_task(l, spec)}
+
+
+@app.post("/api/v1/tasks/{tid}/duplicate", dependencies=[Depends(auth)])
+def task_duplicate(tid: str, body: IdIn, l: Lab = Depends(lab)):
+    try:
+        spec = duplicate_task(l, tid, body.id)
+    except LabError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e))
+        raise
+    return {"task": spec.model_dump(mode="json", exclude_none=True)}
+
+
+@app.delete("/api/v1/tasks/{tid}", dependencies=[Depends(auth)])
+def task_delete(tid: str, force: bool = False,
+                l: Lab = Depends(lab)):
+    """Archives the task dir — runs/experiments keep their recorded
+    ids; experiment/suite references block deletion unless force."""
+    try:
+        return delete_task(l, tid, force)
+    except LabError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e))
+        raise
+
+
+@app.get("/api/v1/tasks/{tid}/files")
+def task_files(tid: str, l: Lab = Depends(lab)):
+    try:
+        return list_task_files(l, tid)
+    except LabError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e))
+        raise
+
+
+@app.get("/api/v1/tasks/{tid}/file")
+def task_file_get(tid: str, path: str, l: Lab = Depends(lab)):
+    try:
+        return read_task_file(l, tid, path)
+    except LabError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e))
+        raise
+
+
+class TaskFileIn(BaseModel):
+    path: str
+    content: Optional[str] = None
+    content_b64: Optional[str] = None
+
+
+@app.put("/api/v1/tasks/{tid}/file", dependencies=[Depends(auth)])
+def task_file_put(tid: str, body: TaskFileIn, l: Lab = Depends(lab)):
+    try:
+        return put_task_file(l, tid, body.path, body.content,
+                             body.content_b64)
+    except LabError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e))
+        raise
+
+
+@app.delete("/api/v1/tasks/{tid}/file", dependencies=[Depends(auth)])
+def task_file_delete(tid: str, path: str, l: Lab = Depends(lab)):
+    try:
+        return delete_task_file(l, tid, path)
+    except LabError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e))
+        raise
 
 
 @app.get("/api/v1/rubrics")
@@ -2225,15 +2332,124 @@ def rubrics(l: Lab = Depends(lab)):
 
 
 @app.post("/api/v1/rubrics", dependencies=[Depends(auth)])
-def rubric_new(body: IdIn, l: Lab = Depends(lab)):
-    """`lab rubric new` — scaffold rubric yaml."""
-    from skilllab.cli import RUBRIC_TEMPLATE
-    p = l.rubrics_dir / f"{body.id}.yaml"
-    if p.is_file():
-        raise HTTPException(409, f"rubric '{body.id}' already exists")
-    l.rubrics_dir.mkdir(parents=True, exist_ok=True)
-    p.write_text(RUBRIC_TEMPLATE.format(rid=body.id))
-    return {"path": str(p)}
+def rubric_new(body: Rubric, l: Lab = Depends(lab)):
+    rub = save_rubric(l, body)
+    return {"rubric": rub.model_dump(mode="json", exclude_none=True)}
+
+
+@app.get("/api/v1/rubrics/{rid}")
+def rubric_get(rid: str, l: Lab = Depends(lab)):
+    try:
+        rub = l.rubric(rid)
+    except LabError:
+        raise HTTPException(404, f"rubric '{rid}' not found")
+    return {"rubric": rub.model_dump(mode="json", exclude_none=True),
+            "issues": validate_rubric(l, rub),
+            "used_by": rubric_refs(l, rid)}
+
+
+@app.put("/api/v1/rubrics/{rid}", dependencies=[Depends(auth)])
+def rubric_put(rid: str, body: Rubric, l: Lab = Depends(lab)):
+    try:
+        rub = save_rubric(l, body, old_id=rid)
+    except LabError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e))
+        raise
+    return {"rubric": rub.model_dump(mode="json", exclude_none=True),
+            "issues": validate_rubric(l, rub)}
+
+
+@app.post("/api/v1/rubrics/{rid}/duplicate", dependencies=[Depends(auth)])
+def rubric_duplicate(rid: str, body: IdIn, l: Lab = Depends(lab)):
+    try:
+        rub = duplicate_rubric(l, rid, body.id)
+    except LabError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e))
+        raise
+    return {"rubric": rub.model_dump(mode="json", exclude_none=True)}
+
+
+@app.delete("/api/v1/rubrics/{rid}", dependencies=[Depends(auth)])
+def rubric_delete(rid: str, force: bool = False,
+                  l: Lab = Depends(lab)):
+    try:
+        return delete_rubric(l, rid, force)
+    except LabError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e))
+        raise
+
+
+@app.get("/api/v1/suites")
+def suites_list(l: Lab = Depends(lab)):
+    return list_suites(l)
+
+
+@app.post("/api/v1/suites", dependencies=[Depends(auth)])
+def suite_new(body: dict, l: Lab = Depends(lab)):
+    sid, ids = body.get("id", ""), body.get("tasks") or []
+    if not sid:
+        raise HTTPException(400, "suite needs 'id'")
+    return save_suite(l, sid, ids)
+
+
+@app.put("/api/v1/suites/{sid}", dependencies=[Depends(auth)])
+def suite_put(sid: str, body: dict, l: Lab = Depends(lab)):
+    return save_suite(l, sid, body.get("tasks") or [])
+
+
+@app.post("/api/v1/suites/{sid}/duplicate", dependencies=[Depends(auth)])
+def suite_duplicate(sid: str, body: IdIn, l: Lab = Depends(lab)):
+    s = get_suite(l, sid)
+    return save_suite(l, body.id, s["tasks"])
+
+
+@app.delete("/api/v1/suites/{sid}", dependencies=[Depends(auth)])
+def suite_delete(sid: str, l: Lab = Depends(lab)):
+    return delete_suite(l, sid)
+
+
+@app.get("/api/v1/suite/validate")
+def suite_validate(l: Lab = Depends(lab)):
+    """Unified suite validation — the same rules the engine enforces
+    at run time, surfaced per task/rubric/suite with fixes."""
+    return validate_suite(l)
+
+
+@app.get("/api/v1/suite/export")
+def suite_export(format: str = "json", l: Lab = Depends(lab)):
+    from fastapi.responses import PlainTextResponse
+    if format == "json":
+        return PlainTextResponse(
+            __import__("json").dumps(export_tasks_json(l), indent=2),
+            media_type="application/json",
+            headers={"content-disposition":
+                     "attachment; filename=skilllab-tasks.json"})
+    if format == "csv":
+        return PlainTextResponse(
+            export_tasks_csv(l), media_type="text/csv",
+            headers={"content-disposition":
+                     "attachment; filename=skilllab-tasks.csv"})
+    raise HTTPException(400, "format must be json or csv")
+
+
+class DatasetImportIn(BaseModel):
+    format: str = "json"                  # json | csv
+    data: str                             # raw file text
+    confirm: bool = False                 # False = preview only
+    on_conflict: str = "skip"             # skip | overwrite | reject
+
+
+@app.post("/api/v1/suite/import", dependencies=[Depends(auth)])
+def suite_import(body: DatasetImportIn, l: Lab = Depends(lab)):
+    if body.on_conflict not in ("skip", "overwrite", "reject"):
+        raise HTTPException(400, "on_conflict must be skip|overwrite|"
+                                 "reject")
+    if not body.confirm:
+        return preview_import(l, body.format, body.data)
+    return apply_import(l, body.format, body.data, body.on_conflict)
 
 
 class ExportIn(BaseModel):

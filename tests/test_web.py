@@ -328,3 +328,187 @@ class TestJobsRace:
                         headers=H, json={})
         assert r.status_code == 503
         assert "conflict" in r.json()["detail"]
+
+
+class TestSuiteAPI:
+    """Test Suite management — task/rubric/suite CRUD, fixtures,
+    validation, datasets."""
+
+    def test_task_crud_cycle(self, client):
+        spec = {"id": "t-new", "kind": "performance",
+                "prompt": "do the thing", "fixtures": [],
+                "skill_relevance": {"expected": [], "unexpected": []},
+                "deterministic_checks": [
+                    {"type": "file-exists", "path": "OUTPUT.md"}]}
+        r = client.post("/api/v1/tasks", headers=H, json=spec)
+        assert r.status_code == 200, r.text
+        assert client.get("/api/v1/tasks/t-new",
+                          headers=H).json()["task"]["id"] == "t-new"
+        spec["prompt"] = "do the thing differently"
+        r = client.put("/api/v1/tasks/t-new", headers=H, json=spec)
+        assert r.status_code == 200
+        got = client.get("/api/v1/tasks/t-new", headers=H).json()
+        assert "differently" in got["resolved_prompt"]
+        # duplicate -> independent copy
+        r = client.post("/api/v1/tasks/t-new/duplicate",
+                        headers=H, json={"id": "t-new-copy"})
+        assert r.status_code == 200
+        # delete archives (unreferenced -> no force needed)
+        r = client.delete("/api/v1/tasks/t-new-copy", headers=H)
+        assert r.status_code == 200
+        assert client.get("/api/v1/tasks/t-new-copy",
+                          headers=H).status_code == 404
+        assert client.get("/api/v1/tasks/t-new",
+                          headers=H).status_code == 200
+
+    def test_task_create_conflict_and_validation(self, client):
+        client.post("/api/v1/tasks", headers=H,
+                    json={"id": "dup"})
+        r = client.post("/api/v1/tasks", headers=H,
+                        json={"id": "dup"})
+        assert r.status_code in (400, 409)
+        r = client.post("/api/v1/tasks", headers=H,
+                        json={"id": "../escape"})
+        assert r.status_code in (400, 422)
+
+    def test_task_delete_blocked_by_experiment_ref(self, client):
+        # write-commit-msg is referenced by exp-trigger-wording
+        r = client.delete("/api/v1/tasks/write-commit-msg",
+                          headers=H)
+        assert r.status_code in (400, 409)
+        assert "referenced" in r.json()["detail"]
+        r = client.delete("/api/v1/tasks/write-commit-msg?force=true",
+                          headers=H)
+        assert r.status_code == 200
+        # archived, not unlinked — runs still inspectable
+        assert client.get("/api/v1/tasks/write-commit-msg",
+                          headers=H).status_code == 404
+
+    def test_task_files_safety(self, client):
+        tid = "files-task"
+        client.post("/api/v1/tasks", headers=H, json={"id": tid})
+        r = client.put(f"/api/v1/tasks/{tid}/file", headers=H,
+                       json={"path": "src/app.py",
+                             "content": "print(1)\n"})
+        assert r.status_code == 200
+        files = client.get(f"/api/v1/tasks/{tid}/files",
+                           headers=H).json()
+        assert any(f["path"] == "src/app.py" for f in files)
+        got = client.get(f"/api/v1/tasks/{tid}/file?path=src/app.py",
+                         headers=H).json()
+        assert got["content"] == "print(1)\n"
+        # traversal + task.yaml bypass both refused
+        for bad in ("../x", "/etc/passwd", "task.yaml", "a/../../b"):
+            r = client.put(f"/api/v1/tasks/{tid}/file", headers=H,
+                           json={"path": bad, "content": "x"})
+            assert r.status_code == 400, bad
+        r = client.delete(
+            f"/api/v1/tasks/{tid}/file?path=src/app.py", headers=H)
+        assert r.status_code == 200
+
+    def test_rubric_crud_and_ref_protection(self, client):
+        rub = {"id": "r1", "criteria": [
+            {"id": "ok", "weight": 1.0, "method": "deterministic",
+             "check": "out.md", "scale": "1-5"},
+            {"id": "judge", "weight": 2.0, "method": "llm-judge",
+             "judge_prompt": "is it good", "scale": "1-5"}]}
+        r = client.post("/api/v1/rubrics", headers=H, json=rub)
+        assert r.status_code == 200, r.text
+        got = client.get("/api/v1/rubrics/r1", headers=H).json()
+        assert len(got["rubric"]["criteria"]) == 2
+        assert any(i["severity"] == "warning"
+                   for i in got["issues"])      # mock judge warns
+        # task referencing it blocks delete
+        client.post("/api/v1/tasks", headers=H,
+                    json={"id": "uses-r1", "prompt": "x",
+                          "rubric": "r1"})
+        r = client.delete("/api/v1/rubrics/r1", headers=H)
+        assert r.status_code in (400, 409)
+        r = client.post("/api/v1/rubrics/r1/duplicate",
+                        headers=H, json={"id": "r1-copy"})
+        assert r.status_code == 200
+        rub2 = {"id": "r1", "criteria": [
+            {"id": "ok2", "weight": 0, "method": "deterministic"}]}
+        r = client.put("/api/v1/rubrics/r1", headers=H, json=rub2)
+        assert r.status_code == 200
+        assert any("weight" in i["message"]
+                   for i in r.json()["issues"])
+
+    def test_suites_crud(self, client):
+        r = client.post("/api/v1/suites", headers=H,
+                        json={"id": "s1", "tasks": ["write-commit-msg"]})
+        assert r.status_code == 200
+        lst = client.get("/api/v1/suites", headers=H).json()
+        assert lst[0]["id"] == "s1"
+        r = client.put("/api/v1/suites/s1", headers=H,
+                       json={"tasks": ["write-commit-msg",
+                                       "unrelated-refactor"]})
+        assert r.json()["tasks"] == ["write-commit-msg",
+                                     "unrelated-refactor"]
+        client.post("/api/v1/suites/s1/duplicate", headers=H,
+                    json={"id": "s1-copy"})
+        assert len(client.get("/api/v1/suites",
+                              headers=H).json()) == 2
+        client.delete("/api/v1/suites/s1-copy", headers=H)
+        assert len(client.get("/api/v1/suites",
+                              headers=H).json()) == 1
+
+    def test_suite_validate(self, client):
+        r = client.get("/api/v1/suite/validate", headers=H)
+        assert r.status_code == 200
+        j = r.json()
+        assert "write-commit-msg" in j["tasks"]
+        assert j["runnable"]["write-commit-msg"] is True
+
+    def test_dataset_import_export_json(self, client):
+        data = '[{"id":"imp-1","kind":"performance","prompt":"p"},' \
+               ' {"id":"imp-2","kind":"bogus-kind"}]'
+        prev = client.post("/api/v1/suite/import", headers=H,
+                           json={"format": "json", "data": data})
+        j = prev.json()
+        assert len(j["ok"]) == 1 and len(j["bad"]) == 1
+        # invalid dataset refuses to write anything
+        r = client.post("/api/v1/suite/import", headers=H,
+                        json={"format": "json", "data": data,
+                              "confirm": True})
+        assert r.status_code in (400, 422)
+        assert client.get("/api/v1/tasks/imp-1",
+                          headers=H).status_code == 404
+        good = '[{"id":"imp-1","kind":"performance","prompt":"p"}]'
+        r = client.post("/api/v1/suite/import", headers=H,
+                        json={"format": "json", "data": good,
+                              "confirm": True})
+        assert r.json()["imported"] == ["imp-1"]
+        # conflict: skip by default, overwrite when asked
+        r = client.post("/api/v1/suite/import", headers=H,
+                        json={"format": "json", "data": good,
+                              "confirm": True})
+        assert r.json()["skipped"] == ["imp-1"]
+        r = client.post("/api/v1/suite/import", headers=H,
+                        json={"format": "json", "data": good,
+                              "confirm": True,
+                              "on_conflict": "overwrite"})
+        assert r.json()["imported"] == ["imp-1"]
+        r = client.get("/api/v1/suite/export?format=json",
+                       headers=H)
+        assert "imp-1" in r.text
+
+    def test_dataset_csv_roundtrip(self, client):
+        r = client.get("/api/v1/suite/export?format=csv", headers=H)
+        assert r.status_code == 200
+        assert "id,kind,prompt" in r.text
+        r = client.post("/api/v1/suite/import", headers=H,
+                        json={"format": "csv", "data": r.text})
+        j = r.json()
+        assert j["bad"] == [] and j["parse_errors"] == []
+
+    def test_historical_runs_survive_task_edit(self, client):
+        # edit the task's prompt — recorded run evidence is untouched
+        spec = client.get("/api/v1/tasks/unrelated-refactor",
+                          headers=H).json()["task"]
+        spec["prompt"] = "edited prompt"
+        client.put("/api/v1/tasks/unrelated-refactor",
+                   headers=H, json=spec)
+        r = client.get("/api/v1/experiments/exp-trigger-wording/runs",
+                       headers=H)
+        assert r.status_code == 200 and r.json()

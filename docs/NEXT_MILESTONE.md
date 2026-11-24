@@ -78,3 +78,24 @@ REMAINING LIMITATIONS
 - TestClient flows: auth 401/200, editor write→409→revision→
   restore→rename guards, experiment config/duplicate/job-run,
   regression job completion.
+
+## Test Suite builder (completed this milestone)
+
+`skilllab/suite.py` + `features/suite/SuitePage.jsx`: full visual
+management of tasks, rubrics and named suites — task CRUD/duplicate/
+archive with optimistic draft editing (general/input/evaluation/
+fixtures tabs), rubric criteria editor, suite membership editor, safe
+task-file access (`/files`, `/file` path-contained), whole-suite
+validation (`/suite/validate` — errors vs warnings, runnable flag),
+JSON/CSV dataset export + import with preview→confirm and
+skip/overwrite/reject conflict policies. Benchmark launcher gates on
+runnable tasks and accepts suite selection; regression `--tasks`
+accepts suite names. `Jobs.submit` race fixed (RLock around all
+SQLite access, bounded insert retry, `JobSubmitError`→503). Frontend
+e2e consolidated on the root `e2e/` suite (auth-aware); stale
+`web/frontend/e2e/` copy removed.
+
+New endpoints: task/rubric CRUD+duplicate, suite CRUD+duplicate,
+task files read/write/delete, suite validate/export/import.
+Tests: `pytest tests/` → 123/123, `playwright test` → 34/34
+(incl. suite flows A–F).

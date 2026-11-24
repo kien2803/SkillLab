@@ -180,9 +180,12 @@ test("projects page detail renders entity sections", async ({ page }) => {
 
 test("workspace page lists tasks + rubrics", async ({ page }) => {
   await page.goto("/workspace");
-  await expect(page.getByText(/Tasks \(/)).toBeVisible();
-  await expect(page.getByText(/Rubrics \(/)).toBeVisible();
-  await expect(page.getByText("write-commit-msg")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Test Suite" }))
+    .toBeVisible();
+  await expect(page.getByRole("button", { name: /tasks \(\d+\)/ }))
+    .toBeVisible();
+  await expect(page.getByRole("button", { name: "write-commit-msg" }))
+    .toBeVisible();
   const r = await page.request.get("/api/v1/rubrics");
   expect(r.ok()).toBeTruthy();
   expect(Array.isArray(await r.json())).toBeTruthy();

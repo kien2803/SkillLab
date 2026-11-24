@@ -3,6 +3,7 @@ import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 
 import { TOKEN_KEY, tok, api } from "./api.js";
 import { SkillEditor } from "./features/skills/SkillEditor.jsx";
+import { SuitePage } from "./features/suite/SuitePage.jsx";
 import { ExperimentBuilder } from
   "./features/experiments/ExperimentBuilder.jsx";
 import Landing from "./features/landing/Landing.jsx";
@@ -833,6 +834,7 @@ function Knowledge() {
 function RegressionsBody() {
   const [list, setList] = useState([]);
   const [skills, setSkills] = useState([]);
+  const [suites, setSuites] = useState([]);
   const [det, setDet] = useState(null);
   const [msg, setMsg] = useState("");
   const [form, setForm] = useState({ skill: "", baseline: "",
@@ -840,7 +842,8 @@ function RegressionsBody() {
     model: "" });
   const load = () => api("/regressions").then(setList).catch(() => {});
   useEffect(() => { load();
-    api("/skills").then(setSkills).catch(() => {}); }, []);
+    api("/skills").then(setSkills).catch(() => {});
+    api("/suites").then(setSuites).catch(() => {}); }, []);
   const open = (id) => api("/regressions/" + id).then(setDet)
     .catch((e) => setMsg(String(e)));
   const run = () => {
@@ -884,8 +887,14 @@ function RegressionsBody() {
           {variants.filter((v) => v.id !== form.baseline).map((v) =>
             <option key={v.id} value={v.id}>{v.id}</option>)}
         </select>
-        <input value={form.tasks} placeholder="tasks (default)"
+        <input value={form.tasks} placeholder="tasks (default, suite name, or ids)"
+          list="suite-names" title="'default'/'all' = whole bank, a suites/ name, or comma-separated task ids"
           onChange={(e) => setForm({ ...form, tasks: e.target.value })} />
+        <datalist id="suite-names">
+          <option value="default" />
+          <option value="all" />
+          {suites.map((s) => <option key={s.id} value={s.id} />)}
+        </datalist>
         <select value={form.mode}
           onChange={(e) => setForm({ ...form, mode: e.target.value })}>
           <option value="">mode…</option>
@@ -1158,6 +1167,9 @@ function ModelHint({ model }) {
 function BenchLauncher({ onLaunched }) {
   const [skills, setSkills] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [runnable, setRunnable] = useState({});
+  const [taskIssues, setTaskIssues] = useState({});
+  const [suites, setSuites] = useState([]);
   const [f, setF] = useState({ skill: "", variant: "", tasks: [],
     rollouts: 1, model: "mock", mode: "available" });
   const [adv, setAdv] = useState(false);
@@ -1165,11 +1177,24 @@ function BenchLauncher({ onLaunched }) {
   useEffect(() => {
     api("/skills").then(setSkills).catch(() => {});
     api("/tasks").then(setTasks).catch(() => {});
+    api("/suites").then(setSuites).catch(() => {});
+    api("/suite/validate").then((v) => {
+      setRunnable(v.runnable || {}); setTaskIssues(v.tasks || {});
+    }).catch(() => {});
     api("/status").then((s) => s?.model &&
       setF((x) => ({ ...x, model: s.model }))).catch(() => {});
   }, []);
   const sk = skills.find((s) => s.id === f.skill);
   const variants = sk?.variants || [];
+  const badReason = (t) => (taskIssues[t] || [])
+    .filter((i) => i.severity === "error").map((i) => i.message)
+    .join("; ");
+  const pickSuite = (sid) => {
+    if (!sid) return;
+    const s = suites.find((x) => x.id === sid);
+    if (s) setF({ ...f, tasks: s.tasks.filter(
+      (t) => runnable[t] !== false) });
+  };
 
   const launch = () => {
     const ref = `${f.skill}@${f.variant}`;
@@ -1207,13 +1232,33 @@ function BenchLauncher({ onLaunched }) {
         <option value="">variant…</option>
         {variants.map((v) => <option key={v.id}>{v.id}</option>)}
       </select>
-      <select multiple size={Math.min(4, Math.max(2, tasks.length))}
-        value={f.tasks}
-        onChange={(e) => setF({ ...f, tasks:
-          [...e.target.selectedOptions].map((o) => o.value) })}>
-        {tasks.map((t) => <option key={t.id} value={t.id}>
-          {t.id} · {t.kind}</option>)}
-      </select>
+      <label className="fld" style={{ gap: 4 }}>
+        <span className="mut small">tasks ({f.tasks.length} selected)
+          {suites.length > 0 && <select value=""
+            style={{ marginLeft: 8, width: "auto" }}
+            onChange={(e) => pickSuite(e.target.value)}>
+            <option value="">suite…</option>
+            {suites.map((s) => <option key={s.id}
+              value={s.id}>{s.id} ({s.tasks.length})</option>)}
+          </select>}
+          <button className="link" type="button"
+            style={{ marginLeft: 8, padding: 0 }}
+            onClick={() => setF({ ...f, tasks: tasks
+              .filter((t) => runnable[t.id] !== false)
+              .map((t) => t.id) })}>all valid</button>
+        </span>
+        <select multiple size={Math.min(4, Math.max(2, tasks.length))}
+          value={f.tasks}
+          onChange={(e) => setF({ ...f, tasks:
+            [...e.target.selectedOptions].map((o) => o.value) })}>
+          {tasks.map((t) => {
+            const bad = runnable[t.id] === false;
+            return <option key={t.id} value={t.id} disabled={bad}
+              title={bad ? badReason(t.id) : t.id}>
+              {t.id} · {t.kind}{bad ? " — invalid" : ""}</option>;
+          })}
+        </select>
+      </label>
       <input type="number" min="1" max="10" value={f.rollouts}
         style={{ width: 70 }} title="rollouts per arm"
         onChange={(e) => setF({ ...f,
@@ -1384,55 +1429,9 @@ function Report() {
 }
 
 function Workspace() {
-  const [ts, setTs] = useState([]);
-  const [rb, setRb] = useState([]);
-  const [msg, setMsg] = useState("");
-  const load = () => {
-    api("/tasks").then(setTs).catch(() => {});
-    api("/rubrics").then(setRb).catch(() => {});
-  };
-  useEffect(() => { load(); }, []);
-  const mk = (kind) => (v) =>
-    api(`/${kind}`, { method: "POST", body: JSON.stringify({ id: v }) })
-      .then(() => { setMsg(`${kind} '${v}' scaffolded`); load(); })
-      .catch((e) => setMsg(String(e)));
-  return <Page title="Test Suite" sub="tasks the agent is scored on + rubric criteria">
-    <Msg m={msg} />
-    <div className="card">
-      <h3>Tasks ({ts.length})</h3>
-      <AddForm ph="new task id" onAdd={mk("tasks")} />
-      <div className="rows">{ts.map((t) => <div key={t.id}
-        className="r" style={{ alignItems: "baseline" }}>
-        <div style={{ flex: 1 }}>
-          <b>{t.id}</b> <span className="pill acc">{t.kind}</span>
-          <span className="mut small"> rubric: {t.rubric || "\u2014"} · checks:
-            {" "}{(t.deterministic_checks || []).length} · fixtures:
-            {" "}{(t.fixtures || []).join(", ") || "\u2014"}</span>
-          {t.skill_relevance && (t.skill_relevance.expected?.length ||
-            t.skill_relevance.unexpected?.length) > 0 &&
-            <div className="small" style={{ color: "var(--accent)" }}>
-              expect: {(t.skill_relevance.expected || []).join(", ") ||
-                "\u2014"} · not: {(t.skill_relevance.unexpected || [])
-                .join(", ") || "\u2014"}</div>}
-          <div className="small mut">
-            {(t.prompt || "").trim().slice(0, 140)}</div>
-        </div>
-      </div>)}</div>
-    </div>
-    <div className="card">
-      <h3>Rubrics ({rb.length})</h3>
-      <AddForm ph="new rubric id" onAdd={mk("rubrics")} />
-      {rb.map((r) => <div key={r.id} className="mt">
-        <b>{r.id}</b>
-        <table className="tbl">
-          <tbody>{(r.criteria || []).map((c, i) => <tr key={i}>
-            <td>{c.id}</td>
-            <td className="num">w={c.weight}</td>
-            <td>{c.method}</td>
-            <td className="mut">{c.check || c.scale || ""}</td>
-          </tr>)}</tbody></table>
-      </div>)}
-    </div>
+  return <Page title="Test Suite"
+    sub="tasks, rubrics, suites and datasets the agent is scored on">
+    <SuitePage />
   </Page>;
 }
 

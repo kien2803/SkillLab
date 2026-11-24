@@ -48,7 +48,8 @@ test("knowledge + regressions + failures + workspace",
   await page.goto("/regressions"); await page.waitForTimeout(400);
   await page.goto("/failures"); await page.waitForTimeout(400);
   await page.goto("/workspace");
-  await expect(page.getByText(/Tasks \(/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Test Suite" }))
+    .toBeVisible();
 });
 
 test("no console errors anywhere", () => {
