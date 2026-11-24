@@ -224,3 +224,107 @@ class TestJobsAPI:
         assert body["job"] and body["planned"] == 2
         j = wait_job(client, body["job"])
         assert j["status"] == "completed"
+
+
+class TestJobsRace:
+    """Deterministic coverage for Jobs.submit() unique-index races —
+    the CI flake that returned {} -> KeyError('id'). _insert is the
+    injectable checkpoint; cross-instance submits exercise the real
+    SQLite unique-index path."""
+
+    def test_cross_instance_same_key_returns_winner(self, tmp_path):
+        import sqlite3 as _sq, threading
+        from web.backend.jobs import Jobs
+        db = tmp_path / "jobs.sqlite"
+        a, b = Jobs(db), Jobs(db)
+        gate = threading.Event()
+        j1 = a.submit("k", "shared", lambda h: gate.wait(5))
+        try:
+            # b's insert hits the partial index on a SEPARATE connection
+            # while a's job is still active -> must return a's job
+            j2 = b.submit("k", "shared", lambda h: None)
+            assert j2["id"] == j1["id"]
+            assert j2["status"] in ("queued", "running")
+        finally:
+            gate.set()
+
+    def test_conflict_winner_finished_retries_fresh(
+            self, tmp_path, monkeypatch):
+        import sqlite3
+        from web.backend.jobs import Jobs
+        db = tmp_path / "jobs.sqlite"
+        a, b = Jobs(db), Jobs(db)
+        j1 = a.submit("k", "done-key", lambda h: None)
+        for _ in range(200):
+            if b.get(j1["id"])["status"] == "completed":
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("competitor never finished")
+        calls = [0]
+        orig = b._insert
+
+        def flaky(*args):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise sqlite3.IntegrityError("simulated")
+            return orig(*args)
+
+        monkeypatch.setattr(b, "_insert", flaky)
+        j2 = b.submit("k", "done-key", lambda h: None)
+        assert calls[0] >= 1
+        assert j2["id"] and j2["id"] != j1["id"]
+        assert j2["status"] in ("queued", "running", "completed")
+
+    def test_persistent_conflict_raises_not_empty(
+            self, tmp_path, monkeypatch):
+        import sqlite3
+        import pytest as _pytest
+        from web.backend.jobs import Jobs, JobSubmitError
+        b = Jobs(tmp_path / "jobs.sqlite")
+        b.SUBMIT_ATTEMPTS = 3
+        b.SUBMIT_RETRY_S = 0.001
+
+        def always(*args):
+            raise sqlite3.IntegrityError("simulated")
+
+        monkeypatch.setattr(b, "_insert", always)
+        with _pytest.raises(JobSubmitError):
+            b.submit("k", "stuck", lambda h: None)
+
+    def test_completed_key_reusable(self, tmp_path):
+        from web.backend.jobs import Jobs
+        a = Jobs(tmp_path / "jobs.sqlite")
+        j1 = a.submit("k", "reuse", lambda h: None)
+        for _ in range(200):
+            if a.get(j1["id"])["status"] == "completed":
+                break
+            time.sleep(0.01)
+        j2 = a.submit("k", "reuse", lambda h: None)
+        assert j2["id"] != j1["id"]
+
+    def test_submit_failure_maps_to_503(self, client, monkeypatch):
+        from web.backend.jobs import Jobs, JobSubmitError
+
+        def boom(*a, **k):
+            raise JobSubmitError("simulated persistent conflict")
+
+        monkeypatch.setattr(Jobs, "submit", boom)
+        r = client.post("/api/v1/experiments/exp-503/run",
+                        headers=H, json={})
+        # exp doesn't exist -> 404, never reaches submit — make it first
+        assert r.status_code == 404
+        client.post("/api/v1/experiments", headers=H,
+                    json={"id": "exp-503", "category": "capability"})
+        exp = client.get("/api/v1/experiments/exp-503",
+                         headers=H).json()["experiment"]
+        exp["rollouts_per_arm"] = 1
+        exp["tasks"] = ["write-commit-msg"]
+        exp["arms"] = [{"name": "control", "skill": None},
+                       {"name": "t", "skill": "commit-helper@v3-bp"}]
+        client.put("/api/v1/experiments/exp-503/config",
+                   headers=H, json=exp)
+        r = client.post("/api/v1/experiments/exp-503/run",
+                        headers=H, json={})
+        assert r.status_code == 503
+        assert "conflict" in r.json()["detail"]

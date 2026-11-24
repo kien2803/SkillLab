@@ -66,7 +66,11 @@ class Jobs:
         self._db.execute("PRAGMA busy_timeout=30000")
         self._db.executescript(_SCHEMA)
         self._migrate()
-        self._lock = threading.Lock()
+        # RLock: one shared connection means EVERY execute/transaction
+        # must hold the lock — with conn: blocks interleaving across
+        # threads corrupt sqlite3's transaction state (observed as
+        # intermittent InterfaceError). Reentrant so helpers can nest.
+        self._lock = threading.RLock()
         self._pool = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="skilllab-job")
         self._cancel: dict[str, threading.Event] = {}
@@ -97,34 +101,63 @@ class Jobs:
                 (time.time(),))
 
     # ---------- lifecycle ----------
+    # bound on check+insert cycles when the insert keeps losing the
+    # unique-index race to another connection (see submit docstring)
+    SUBMIT_ATTEMPTS = 50
+    SUBMIT_RETRY_S = 0.025
+
+    def _insert(self, jid: str, kind: str, key: str,
+                timeout_s: float) -> None:
+        """One queued-row insert — the atomic uniqueness checkpoint.
+        Kept tiny so tests can inject a deterministic IntegrityError."""
+        with self._db:
+            self._db.execute(
+                "INSERT INTO jobs (id,kind,key,status,created,"
+                "timeout_s) VALUES (?,?,?,'queued',?,?)",
+                (jid, kind, key, time.time(), timeout_s))
+
     def submit(self, kind: str, key: str, fn,
                timeout_s: float = DEFAULT_TIMEOUT) -> dict:
         """Enqueue `fn(job_handle)`; returns the existing active job for
         `key` when one exists (the UNIQUE index makes this atomic —
-        a losing insert race returns the winner's job)."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT id FROM jobs WHERE key=? AND status IN "
-                "('queued','running')", (key,)).fetchone()
-            if row:
-                return self.get(row[0])
-            jid = f"job-{uuid.uuid4().hex[:10]}"
-            try:
-                with self._db:
-                    self._db.execute(
-                        "INSERT INTO jobs (id,kind,key,status,created,"
-                        "timeout_s) VALUES (?,?,?,'queued',?,?)",
-                        (jid, kind, key, time.time(), timeout_s))
-            except sqlite3.IntegrityError:
-                # concurrent submit won the key — return their job
+        a losing insert race returns the winner's job).
+
+        The unique-index conflict path needs care: a conflicting insert
+        means a queued/running row for `key` exists on *some* connection
+        — another Jobs instance or process sharing this db file; the
+        in-process lock already serializes same-instance submits. That
+        competitor may finish in the window between our failed insert
+        and the follow-up query, so the whole check+insert runs as a
+        bounded retry cycle instead of a single recheck:
+
+          winner still active -> return its record;
+          winner finished     -> its index entry is gone, insert wins;
+          conflict persists   -> raise JobSubmitError.
+
+        Submit therefore NEVER returns {} — a caller either gets a real
+        job record or an exception."""
+        for attempt in range(self.SUBMIT_ATTEMPTS):
+            if attempt:
+                # outside the lock — let workers/checkpoints breathe
+                time.sleep(self.SUBMIT_RETRY_S)
+            with self._lock:
                 row = self._db.execute(
                     "SELECT id FROM jobs WHERE key=? AND status IN "
                     "('queued','running')", (key,)).fetchone()
-                return self.get(row[0]) if row else {}
-            ev = threading.Event()
-            self._cancel[jid] = ev
-        self._pool.submit(self._run, jid, fn, ev)
-        return self.get(jid)
+                if row:
+                    return self.get(row[0])
+                jid = f"job-{uuid.uuid4().hex[:10]}"
+                try:
+                    self._insert(jid, kind, key, timeout_s)
+                except sqlite3.IntegrityError:
+                    continue          # winner exists — recheck next pass
+                ev = threading.Event()
+                self._cancel[jid] = ev
+            self._pool.submit(self._run, jid, fn, ev)
+            return self.get(jid)
+        raise JobSubmitError(
+            f"could not submit job for key {key!r}: persistent "
+            "uniqueness conflict in the jobs store — retry")
 
     def _run(self, jid: str, fn, ev: threading.Event) -> None:
         if not self._transition(jid, "queued", "running",
@@ -158,35 +191,38 @@ class Jobs:
 
     # ---------- accessors ----------
     def get(self, jid: str) -> dict:
-        r = self._db.execute("SELECT * FROM jobs WHERE id=?",
-                             (jid,)).fetchone()
-        return self._row(r) if r else {}
+        with self._lock:
+            r = self._db.execute("SELECT * FROM jobs WHERE id=?",
+                                 (jid,)).fetchone()
+            return self._row(r) if r else {}
 
     def list(self, limit: int = 50) -> list[dict]:
-        rows = self._db.execute(
-            "SELECT * FROM jobs ORDER BY created DESC LIMIT ?",
-            (limit,)).fetchall()
-        return [self._row(r) for r in rows]
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM jobs ORDER BY created DESC LIMIT ?",
+                (limit,)).fetchall()
+            return [self._row(r) for r in rows]
 
     def cancel(self, jid: str) -> dict:
-        j = self.get(jid)
-        if not j or j["status"] not in _ACTIVE:
-            return j
-        ev = self._cancel.get(jid)
-        if ev:
-            ev.set()                           # running: cooperative
-        if j["status"] == "queued":
-            # may still flip to running concurrently — the worker checks
-            self._db.execute(
-                "UPDATE jobs SET status='cancelled', finished=? "
-                "WHERE id=? AND status='queued'",
-                (time.time(), jid))
-            self._db.commit()
-        else:
-            self._db.execute(
-                "UPDATE jobs SET cancel=1 WHERE id=?", (jid,))
-            self._db.commit()
-        return self.get(jid)
+        with self._lock:
+            j = self.get(jid)
+            if not j or j["status"] not in _ACTIVE:
+                return j
+            ev = self._cancel.get(jid)
+            if ev:
+                ev.set()                       # running: cooperative
+            if j["status"] == "queued":
+                # may still flip to running — the worker checks
+                self._db.execute(
+                    "UPDATE jobs SET status='cancelled', finished=? "
+                    "WHERE id=? AND status='queued'",
+                    (time.time(), jid))
+                self._db.commit()
+            else:
+                self._db.execute(
+                    "UPDATE jobs SET cancel=1 WHERE id=?", (jid,))
+                self._db.commit()
+            return self.get(jid)
 
     # ---------- internals ----------
     def _transition(self, jid: str, frm: str, to: str, **kv) -> bool:
@@ -210,9 +246,10 @@ class Jobs:
         works if the event map entry is gone)."""
         if ev.is_set():
             raise _Cancelled()
-        row = self._db.execute(
-            "SELECT status, cancel, timeout_s, started FROM jobs "
-            "WHERE id=?", (jid,)).fetchone()
+        with self._lock:
+            row = self._db.execute(
+                "SELECT status, cancel, timeout_s, started FROM jobs "
+                "WHERE id=?", (jid,)).fetchone()
         if row is None:
             raise _Cancelled()
         status, cancel, tmo, started = row
@@ -246,6 +283,12 @@ class Jobs:
         d = dict(zip(keys, r))
         d["logs"] = json.loads(d["logs"] or "[]")
         return d
+
+
+class JobSubmitError(RuntimeError):
+    """Raised when a job cannot be enqueued — a persistent uniqueness
+    conflict means the jobs store cannot honestly identify the job that
+    should own the key. Mapped to HTTP 503 by the app (retry-safe)."""
 
 
 class _Cancelled(Exception):

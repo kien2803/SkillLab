@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException
 
 from skilllab.lab import Lab, LabError, check_id
+from web.backend.jobs import Jobs, JobSubmitError
 
 LAB_DIR = Path(os.environ.get("SKILLLAB_DIR", "examples/demo-lab"))
 
@@ -24,6 +25,14 @@ def _lab_error_handler(_req, exc: LabError):
     invalid ids/inputs surface as 400, never as a bare 500."""
     from fastapi.responses import JSONResponse
     return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@app.exception_handler(JobSubmitError)
+def _job_submit_handler(_req, exc: "JobSubmitError"):
+    """Job submission genuinely could not complete — a 503 (retry-safe)
+    rather than a KeyError/500 as if it had succeeded."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"detail": str(exc)}, status_code=503)
 
 
 def lab() -> Lab:
@@ -927,7 +936,6 @@ def _jobs(l: Lab):
         _JOB_STORES = {}
     k = str(l.root)
     if k not in _JOB_STORES:
-        from .jobs import Jobs
         _JOB_STORES[k] = Jobs(l.d("jobs") / "jobs.sqlite")
     return _JOB_STORES[k]
 
